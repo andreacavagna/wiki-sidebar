@@ -1,0 +1,6 @@
+{
+  "name": "wiki-sidebar",
+  "version": "0.1.0",
+  "description": "Sidebar for the LLM Wiki: status, ask box, open points and today's TODOs",
+  "types": "./types/index.d.ts"
+}

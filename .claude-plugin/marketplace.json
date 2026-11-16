@@ -1,0 +1,5 @@
+{
+  "name": "wiki-sidebar",
+  "owner": { "name": "andreacavagna" },
+  "plugins": [{ "name": "wiki-sidebar", "source": "./" }]
+}
