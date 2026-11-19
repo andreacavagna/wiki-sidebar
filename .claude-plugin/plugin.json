@@ -1,6 +1,7 @@
 {
   "name": "wiki-sidebar",
-  "version": "0.1.0",
-  "description": "Sidebar for the LLM Wiki: status, ask box, open points and today's TODOs",
+  "version": "0.3.0",
+  "description": "LLM Wiki quest board: reads the local Obsidian vault, shows level, streak, quests and bosses, with links into Obsidian",
+  "author": { "name": "Andrea Cavagna" },
   "types": "./types/index.d.ts"
 }
