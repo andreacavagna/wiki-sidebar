@@ -191,6 +191,20 @@ async function openTodoFile($: any) {
 
 const askClaude = ($: any, text: string) => void $.prompt.submit({ text, asUser: true })
 
+/** The prompt a to-do's Start button sends: the item, its link and its source line, under the vault rules. */
+function startPrompt(t: TodoItem): string {
+  return [
+    `Start working on: ${t.text} (${t.url})${t.context ? ` · ${t.context}` : ''}`,
+    '',
+    'This is an open item from todo.md. Follow the vault rules in CLAUDE.md: read the linked source first; drafts only for anything outward-facing (Slack, Notion, Jira, email), so show me the draft and wait for my OK before sending or posting. Do not tick the item in todo.md; I do that from the sidebar.',
+  ].join('\n')
+}
+
+function startTodo($: any, t: TodoItem) {
+  askClaude($, startPrompt(t))
+  void $.ui.toast(`Started: ${cut(t.text, 40)}`)
+}
+
 // ---------- derived game state ----------
 
 function gameOf(snap: Snapshot) {
@@ -428,9 +442,14 @@ async function drawPanel($: any, e: any) {
                   {cut(t.context, 60)}
                 </Text>
               ) : null}
-              <Button key={`open-${t.id}`} plain onPress={() => void openLink($, t.url)}>
-                ↗ {KIND[t.kind].open}
-              </Button>
+              <Box flexDirection="row" gap={1} flexWrap="wrap">
+                <Button key={`start-${t.id}`} variant="primary" onPress={() => startTodo($, t)}>
+                  ▶ Start
+                </Button>
+                <Button key={`open-${t.id}`} plain onPress={() => void openLink($, t.url)}>
+                  ↗ {KIND[t.kind].open}
+                </Button>
+              </Box>
             </Box>
           </Box>
         ))}

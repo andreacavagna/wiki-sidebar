@@ -5,6 +5,7 @@ A Claude Code mod for the LLM Wiki Obsidian vault. It opens a "To-do quests" pan
 ## Use
 - The pane opens when a session starts.
 - `/wiki` reopens it and prints the to-do list.
+- Each open to-do has a **Start** button: it sends "Start working on: <item> (<link>) · <source>" to the chat, with the vault rule that anything outward-facing is a draft for review. Done items have none.
 - Asking in plain words also opens it: "open the wiki sidebar", "show the sidebar", "apri la sidebar".
 
 ## Install
