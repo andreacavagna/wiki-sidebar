@@ -1,4 +1,4 @@
-export type TodoKind = 'slack' | 'notion' | 'artifact'
+export type TodoKind = 'slack' | 'notion' | 'artifact' | 'workday'
 
 export type TodoItem = {
   id: string

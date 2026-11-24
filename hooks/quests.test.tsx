@@ -8,6 +8,7 @@ const SEED = [
   '- [ ] [Send David the Michelin doc](https://tripadvisor.enterprise.slack.com/team/UMZ4WFWBT) · Andrea x David, 17 Nov',
   '- [ ] [Finish the ranked publication PRD](https://app.notion.com/p/41a1237c10bf815bb20fcaab8f7457be) · 16 Nov',
   '- [ ] [Complete the publication gate](https://claude.ai/artifact/SoUyU5K75pAPVrU12sFLAF)',
+  '- [ ] [Performance review: give feedback for a teammate](https://www.myworkday.com/tripadvisor/email-universal/inst/779$1/rel-task/2997$4086.htmld) · Workday',
   '- [ ] [Test the Streamlit page](https://example.com/streamlit) · not a Slack, Notion or artifact link',
   '- [ ] Plain line with no link',
 ].join('\n')
@@ -46,7 +47,7 @@ function engine(on: any, files: Record<string, string>, opened: string[]) {
 }
 
 for (const surface of ['terminal', 'desktop'] as const) {
-  test(`only Slack, Notion and artifact to-dos show, open their link and tick in todo.md (${surface})`, async ($, on) => {
+  test(`only Slack, Notion, artifact and Workday to-dos show, open their link and tick in todo.md (${surface})`, async ($, on) => {
     const files: Record<string, string> = { [TODO]: SEED }
     const opened: string[] = []
     engine(on, files, opened)
@@ -56,6 +57,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
     expect((await ui.find({ type: 'Text', text: /Send David/ }))?.text).toContain('Send David')
     expect((await ui.find({ type: 'Text', text: /ranked publication PRD/ }))?.text).toContain('PRD')
     expect((await ui.find({ type: 'Text', text: /publication gate/ }))?.text).toContain('gate')
+    expect((await ui.find({ type: 'Text', text: /Performance review/ }))?.text).toContain('teammate')
     expect(await ui.find({ type: 'Text', text: /Streamlit/ })).toBeUndefined()
     expect(await ui.find({ type: 'Text', text: /Plain line/ })).toBeUndefined()
 

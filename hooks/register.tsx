@@ -60,6 +60,7 @@ const KIND: Record<TodoKind, { label: string; open: string; color: string }> = {
   slack: { label: 'SLACK', open: 'Open in Slack', color: '#C08BE0' },
   notion: { label: 'NOTION', open: 'Open in Notion', color: '#9DB4D8' },
   artifact: { label: 'ARTIFACT', open: 'Open artifact', color: '#D97757' },
+  workday: { label: 'WORKDAY', open: 'Open in Workday', color: '#E8B04B' },
 }
 
 // ---------- helpers ----------
@@ -81,6 +82,7 @@ function kindOf(url: string): TodoKind | null {
   if (/^https:\/\/[^/]*slack\.com\//.test(url) || url.startsWith('slack://')) return 'slack'
   if (/^https:\/\/([^/]*\.)?notion\.(so|com)\//.test(url) || url.startsWith('notion://')) return 'notion'
   if (/^https:\/\/claude\.ai\/(code\/)?artifact\//.test(url)) return 'artifact'
+  if (/^https:\/\/([^/]*\.)?myworkday\.com\//.test(url)) return 'workday'
   return null
 }
 
@@ -273,9 +275,9 @@ function heroSvg(g: ReturnType<typeof gameOf>) {
   const pct = Math.max(0, Math.min(1, xpSpan > 0 ? xpIn / xpSpan : 0))
   const H = 250
   const barW = W - 40
-  const counts = (['slack', 'notion', 'artifact'] as const)
+  const counts = (['slack', 'notion', 'artifact', 'workday'] as const)
     .map(k => `<tspan fill="${KIND[k].color}">${KIND[k].label}</tspan> <tspan fill="${C.ink}" font-weight="700">${g.openBy(k)}</tspan>`)
-    .join('   ')
+    .join('  ')
   const current = clawdFor(g.level)
   const big = 1.3
   const bigX = W - 20 - 14 * P * big
@@ -616,7 +618,7 @@ export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'wiki',
-      description: 'To-do quests: your Slack, Notion and artifact to-dos from todo.md',
+      description: 'To-do quests: your Slack, Notion, artifact and Workday to-dos from todo.md',
     })
     const unpainted = lookProblems.find(line => line.startsWith("Desktop won't paint"))
     if (unpainted !== undefined) void $.ui.toast(unpainted)
