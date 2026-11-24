@@ -56,8 +56,6 @@ const TITLES = ['Rookie', 'Closer', 'Finisher', 'Shipper', 'Operator', 'Machine'
 const xpForLevel = (n: number) => (50 * n * (n - 1)) / 2
 const levelOf = (xp: number) => Math.max(1, Math.floor((1 + Math.sqrt(1 + (8 * xp) / 50)) / 2))
 
-type Badge = { icon: string; name: string; hint: string; isUnlocked: boolean }
-
 const KIND: Record<TodoKind, { label: string; open: string; color: string }> = {
   slack: { label: 'SLACK', open: 'Open in Slack', color: '#C08BE0' },
   notion: { label: 'NOTION', open: 'Open in Notion', color: '#9DB4D8' },
@@ -228,16 +226,7 @@ function gameOf(snap: Snapshot) {
   const doneToday = closed.filter(t => t.doneDate === today()).length
   const streak = streakFrom(new Set(closed.map(t => t.doneDate).filter(Boolean)))
   const openBy = (k: TodoKind) => open.filter(t => t.kind === k).length
-  const doneBy = (k: TodoKind) => closed.some(t => t.kind === k)
-  const badges: Badge[] = [
-    { icon: '🎯', name: 'First blood', hint: '1 done', isUnlocked: closed.length >= 1 },
-    { icon: '✅', name: 'Closer', hint: '10 done', isUnlocked: closed.length >= 10 },
-    { icon: '🔥', name: 'On fire', hint: '5-day streak', isUnlocked: streak >= 5 },
-    { icon: '⚡', name: 'Hat-trick', hint: '3 in a day', isUnlocked: doneToday >= 3 },
-    { icon: '🧭', name: 'All-rounder', hint: 'Slack+Notion+artifact', isUnlocked: doneBy('slack') && doneBy('notion') && doneBy('artifact') },
-    { icon: '🧘', name: 'Inbox zero', hint: '0 open', isUnlocked: snap.todos.length > 0 && open.length === 0 },
-  ]
-  return { xp, level, floor, ceil, title, open, closed, doneToday, streak, badges, openBy }
+  return { xp, level, floor, ceil, title, open, closed, doneToday, streak, openBy }
 }
 
 // ---------- text fallback ----------
@@ -277,18 +266,36 @@ const esc = (s: string) =>
 const svgRoot = (h: number, body: string) =>
   `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${h}" width="100%" preserveAspectRatio="xMidYMid meet">${body}</svg>`
 
+/** The level card: level, XP, streak and today, the current Clawd animated beside it, and the Clawd ladder along the bottom. */
 function heroSvg(g: ReturnType<typeof gameOf>) {
   const xpIn = g.xp - g.floor
   const xpSpan = g.ceil - g.floor
   const pct = Math.max(0, Math.min(1, xpSpan > 0 ? xpIn / xpSpan : 0))
-  const H = 176
-  const ringR = 28
-  const ringC = 2 * Math.PI * ringR
-  const cx = W - 50
+  const H = 250
   const barW = W - 40
   const counts = (['slack', 'notion', 'artifact'] as const)
     .map(k => `<tspan fill="${KIND[k].color}">${KIND[k].label}</tspan> <tspan fill="${C.ink}" font-weight="700">${g.openBy(k)}</tspan>`)
     .join('   ')
+  const current = clawdFor(g.level)
+  const big = 1.3
+  const bigX = W - 20 - 14 * P * big
+  const unlocked = Math.min(g.level, CLAWDS.length)
+  const next = CLAWDS[g.level]
+  // the ladder: one small Clawd per level along the bottom
+  const cell = barW / CLAWDS.length
+  const mini = 0.5
+  const ladder = CLAWDS.map((c, i) => {
+    const lv = i + 1
+    const on = g.level >= lv
+    const isCurrent = c === current
+    const cx = 20 + cell * i + cell / 2
+    const x = cx - (14 * P * mini) / 2
+    const art = on ? miniArt(c) : clawdShape(C.tileLine, { eyes: '' })
+    return `<g><title>${esc(on ? `${c.name}, level ${lv}` : `Unlocks at level ${lv}`)}</title>
+    ${isCurrent ? `<rect x="${(cx - cell / 2 + 2).toFixed(1)}" y="196" width="${(cell - 4).toFixed(1)}" height="46" rx="8" fill="${C.coralSoft}" stroke="${C.coral}"/>` : ''}
+    <g transform="translate(${x.toFixed(1)} 210) scale(${mini})" opacity="${on ? 1 : 0.6}">${art}</g>
+    <text x="${cx.toFixed(1)}" y="236" text-anchor="middle" font-family="${MONO}" font-size="7.5" fill="${isCurrent ? C.coral : C.muted}">${on ? `LV ${lv}` : '?'}</text></g>`
+  }).join('')
   return svgRoot(
     H,
     `<defs>
@@ -297,47 +304,20 @@ function heroSvg(g: ReturnType<typeof gameOf>) {
   </defs>
   <rect x="0.5" y="0.5" width="${W - 1}" height="${H - 1}" rx="14" fill="${C.tile}" stroke="${C.tileLine}"/>
   <rect x="0.5" y="0.5" width="${W - 1}" height="${H - 1}" rx="14" fill="url(#glow)"/>
-  <text x="20" y="30" font-family="${MONO}" font-size="10" letter-spacing="2" fill="${C.coral}">◆ TO-DO · ${g.open.length} OPEN</text>
+  <text x="20" y="30" font-family="${MONO}" font-size="10" letter-spacing="2" fill="${C.coral}">◆ TO-DO · ${g.open.length} OPEN · ${g.doneToday} TODAY</text>
   <text x="20" y="66" font-family="${SANS}" font-size="28" font-weight="700" fill="${C.ink}">Level ${g.level}</text>
   <text x="20" y="96" font-family="${SANS}" font-size="24" font-weight="700" fill="${C.coral}">${esc(g.title)}.</text>
-  <circle cx="${cx}" cy="66" r="${ringR}" fill="none" stroke="${C.tileLine}" stroke-width="7"/>
-  <circle cx="${cx}" cy="66" r="${ringR}" fill="none" stroke="url(#bar)" stroke-width="7" stroke-linecap="round"
-    stroke-dasharray="${(ringC * pct).toFixed(1)} ${ringC.toFixed(1)}" transform="rotate(-90 ${cx} 66)"/>
-  <text x="${cx}" y="66" text-anchor="middle" font-family="${MONO}" font-size="15" font-weight="700" fill="${C.ink}">${g.doneToday}</text>
-  <text x="${cx}" y="79" text-anchor="middle" font-family="${MONO}" font-size="7" letter-spacing="1" fill="${C.muted}">TODAY</text>
-  <text x="20" y="120" font-family="${MONO}" font-size="9" letter-spacing="1">${counts}</text>
-  <rect x="20" y="132" width="${barW}" height="7" rx="3.5" fill="${C.tileLine}"/>
-  <rect x="20" y="132" width="${Math.max(7, barW * pct).toFixed(1)}" height="7" rx="3.5" fill="url(#bar)"/>
-  <text x="20" y="160" font-family="${MONO}" font-size="10" fill="${C.muted}"><tspan fill="${C.ink}" font-weight="700">${g.xp}</tspan> XP · ${xpSpan - xpIn} to Lv ${g.level + 1}</text>
-  <text x="${W - 20}" y="160" text-anchor="end" font-family="${MONO}" font-size="10" fill="${g.streak > 0 ? C.gold : C.muted}">🔥 ${g.streak}-DAY STREAK</text>`,
-  )
-}
-
-function badgesSvg(badges: Badge[]) {
-  const perRow = 3
-  const rowH = 92
-  const H = Math.ceil(badges.length / perRow) * rowH + 8
-  const cw = W / perRow
-  const items = badges
-    .map((b, i) => {
-      const cx = cw * (i % perRow) + cw / 2
-      const cy = Math.floor(i / perRow) * rowH + 38
-      const on = b.isUnlocked
-      const r = 22
-      const pts = Array.from({ length: 6 }, (_, k) => {
-        const a = (Math.PI / 3) * k - Math.PI / 2
-        return `${(cx + r * Math.cos(a)).toFixed(1)},${(cy + r * Math.sin(a)).toFixed(1)}`
-      }).join(' ')
-      return `<g opacity="${on ? 1 : 0.45}"><title>${esc(`${b.name}: ${on ? 'unlocked' : b.hint}`)}</title>
-    <polygon points="${pts}" fill="${on ? C.coralSoft : C.tile}" stroke="${on ? C.coral : C.tileLine}" stroke-width="2" ${on ? '' : 'stroke-dasharray="3 3"'}/>
-    <text x="${cx}" y="${cy + 7}" text-anchor="middle" font-size="18">${on ? b.icon : '🔒'}</text>
-    <text x="${cx}" y="${cy + 40}" text-anchor="middle" font-family="${MONO}" font-size="8.5" letter-spacing="0.8" fill="${on ? C.ink : C.muted}">${esc(b.name.toUpperCase())}</text>
-    <text x="${cx}" y="${cy + 53}" text-anchor="middle" font-family="${MONO}" font-size="7.5" fill="${C.muted}">${esc(on ? 'unlocked' : b.hint)}</text></g>`
-    })
-    .join('\n')
-  return svgRoot(
-    H,
-    `<rect x="0.5" y="0.5" width="${W - 1}" height="${H - 1}" rx="12" fill="${C.tile}" stroke="${C.tileLine}"/>${items}`,
+  <g transform="translate(${bigX.toFixed(1)} 50) scale(${big})"><g>${current.motion}${clawdArt(current)}</g></g>
+  <text x="${(bigX + 7 * P * big).toFixed(1)}" y="104" text-anchor="middle" font-family="${MONO}" font-size="8" letter-spacing="1" fill="${C.muted}">${esc(current.name.toUpperCase())}</text>
+  <text x="20" y="122" font-family="${MONO}" font-size="9" letter-spacing="1">${counts}</text>
+  <rect x="20" y="134" width="${barW}" height="7" rx="3.5" fill="${C.tileLine}"/>
+  <rect x="20" y="134" width="${Math.max(7, barW * pct).toFixed(1)}" height="7" rx="3.5" fill="url(#bar)"/>
+  <text x="20" y="162" font-family="${MONO}" font-size="10" fill="${C.muted}"><tspan fill="${C.ink}" font-weight="700">${g.xp}</tspan> XP · ${xpSpan - xpIn} to Lv ${g.level + 1}</text>
+  <text x="${W - 20}" y="162" text-anchor="end" font-family="${MONO}" font-size="10" fill="${g.streak > 0 ? C.gold : C.muted}">🔥 ${g.streak}-DAY STREAK</text>
+  <line x1="20" x2="${W - 20}" y1="176" y2="176" stroke="${C.tileLine}"/>
+  <text x="20" y="190" font-family="${MONO}" font-size="8.5" letter-spacing="1" fill="${C.muted}">CLAWDS <tspan fill="${C.ink}" font-weight="700">${unlocked} OF ${CLAWDS.length}</tspan></text>
+  <text x="${W - 20}" y="190" text-anchor="end" font-family="${MONO}" font-size="8.5" letter-spacing="1" fill="${C.coral}">${next ? `NEXT: ${esc(next.name.toUpperCase())} AT LV ${g.level + 1}` : 'ALL UNLOCKED'}</text>
+  ${ladder}`,
   )
 }
 
@@ -454,39 +434,10 @@ function clawdArt(c: Clawd): string {
   return clawdShape(c.body) + c.extra
 }
 
-/** The ladder: Clawd n unlocks at level n; the last one keeps every level after it. */
-function clawdsSvg(level: number) {
-  const perRow = 4
-  const cw = W / perRow
-  const rowH = 104
-  const H = Math.ceil(CLAWDS.length / perRow) * rowH + 8
-  const artW = 14 * P
-  const items = CLAWDS.map((c, i) => {
-    const lv = i + 1
-    const on = level >= lv
-    const isCurrent = on && (lv === level || (lv === CLAWDS.length && level > CLAWDS.length))
-    const col = i % perRow
-    const row = Math.floor(i / perRow)
-    // centre the last, shorter row
-    const inRow = Math.min(perRow, CLAWDS.length - row * perRow)
-    const x0 = (W - inRow * cw) / 2 + col * cw
-    const cx = x0 + cw / 2
-    const top = row * rowH + 8
-    const scale = 0.9
-    const ax = cx - (artW * scale) / 2
-    const ay = top + 26
-    const art = on
-      ? `<g transform="translate(${ax.toFixed(1)} ${ay}) scale(${scale})"><g>${c.motion}${clawdArt(c)}</g></g>`
-      : `<g transform="translate(${ax.toFixed(1)} ${ay}) scale(${scale})" opacity="0.5">${clawdShape(C.tileLine, { eyes: '' })}</g>
-         <text x="${cx}" y="${ay + 22}" text-anchor="middle" font-family="${MONO}" font-size="14" font-weight="700" fill="${C.muted}">?</text>`
-    const frame = isCurrent
-      ? `<rect x="${(x0 + 4).toFixed(1)}" y="${top}" width="${cw - 8}" height="${rowH - 8}" rx="10" fill="${C.coralSoft}" stroke="${C.coral}" stroke-width="1.5"/>`
-      : ''
-    return `<g><title>${esc(on ? `${c.name}, unlocked at level ${lv}` : `Unlocks at level ${lv}`)}</title>${frame}${art}
-    <text x="${cx}" y="${top + rowH - 30}" text-anchor="middle" font-family="${MONO}" font-size="8.5" letter-spacing="0.8" fill="${on ? C.ink : C.muted}">${esc(on ? c.name.toUpperCase() : 'LOCKED')}</text>
-    <text x="${cx}" y="${top + rowH - 18}" text-anchor="middle" font-family="${MONO}" font-size="7.5" fill="${isCurrent ? C.coral : C.muted}">LV ${lv}${lv === CLAWDS.length ? '+' : ''}</text></g>`
-  }).join('\n')
-  return svgRoot(H, `<rect x="0.5" y="0.5" width="${W - 1}" height="${H - 1}" rx="12" fill="${C.tile}" stroke="${C.tileLine}"/>${items}`)
+/** A still Clawd for the ladder: its look and accessories, no motion. */
+function miniArt(c: Clawd): string {
+  const eyes = [4, 9].map(x => px(x, 2, 1, 2, c.name === 'Mecha' ? '#7fe3ff' : EYE)).join('')
+  return clawdShape(c.body, { eyes }) + (c.extra === 'wave' ? '' : c.extra)
 }
 
 const clawdFor = (level: number) => CLAWDS[Math.min(level, CLAWDS.length) - 1] ?? CLAWDS[0]!
@@ -555,12 +506,15 @@ async function drawPanel($: any, e: any) {
       {hasSvg ? (
         <Svg
           source={heroSvg(g)}
-          alt={`Level ${g.level} ${g.title}, ${g.xp} XP, ${g.open.length} open, ${g.doneToday} done today, ${g.streak}-day streak`}
+          alt={`Level ${g.level} ${g.title}, ${g.xp} XP, ${g.open.length} open, ${g.doneToday} done today, ${g.streak}-day streak. Clawds: ${CLAWDS.map((c, i) => (g.level >= i + 1 ? `${c.name} unlocked` : `${c.name} locked until level ${i + 1}`)).join(', ')}`}
         />
       ) : (
         <Box flexDirection="column" borderStyle="round" borderColor={C.coral} paddingX={1}>
           <Text bold>
             Level {g.level} <Text color={C.coral}>{g.title}.</Text> <Text color={C.gold}>🔥 {g.streak}</Text>
+          </Text>
+          <Text dimColor>
+            👾 {clawdFor(g.level).name} · Clawds {Math.min(g.level, CLAWDS.length)} of {CLAWDS.length}
           </Text>
           <Progress label={`XP to level ${g.level + 1}`} value={g.xp - g.floor} max={g.ceil - g.floor} valueText={`${g.xp} XP`} color={C.coral} />
         </Box>
@@ -631,34 +585,6 @@ async function drawPanel($: any, e: any) {
               </Box>
             </Box>
           ))}
-      </Box>
-
-      {/* Clawds: one per level */}
-      <Box flexDirection="column" gap={1}>
-        {SectionHeader(E, 'CLAWDS', `${Math.min(g.level, CLAWDS.length)} OF ${CLAWDS.length}`)}
-        {hasSvg ? (
-          <Svg
-            source={clawdsSvg(g.level)}
-            alt={CLAWDS.map((c, i) => `${c.name} ${g.level >= i + 1 ? 'unlocked' : `locked until level ${i + 1}`}`).join(', ')}
-          />
-        ) : (
-          <Text>
-            {CLAWDS.map((c, i) => (g.level >= i + 1 ? `👾 ${c.name}` : `🔒 Lv ${i + 1}`)).join('  ')}
-          </Text>
-        )}
-      </Box>
-
-      {/* Badges */}
-      <Box flexDirection="column" gap={1}>
-        {SectionHeader(E, 'BADGES', `${g.badges.filter(b => b.isUnlocked).length} OF ${g.badges.length}`)}
-        {hasSvg ? (
-          <Svg
-            source={badgesSvg(g.badges)}
-            alt={g.badges.map(b => `${b.name} ${b.isUnlocked ? 'unlocked' : 'locked'}`).join(', ')}
-          />
-        ) : (
-          <Text>{g.badges.map(b => `${b.isUnlocked ? b.icon : '🔒'} ${b.name}`).join('  ')}</Text>
-        )}
       </Box>
 
       {/* Footer */}

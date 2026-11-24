@@ -30,16 +30,20 @@ function engine(on: any, files: Record<string, string>, toasts: string[]) {
   on('process.run', () => ({ value: { exitCode: 0, stdout: '', stderr: '' } }))
 }
 
-test('the Clawd ladder shows one Clawd per level reached (desktop)', async ($, on) => {
+test('the level card carries the Clawd ladder and the badges are gone (desktop)', async ($, on) => {
   const files = { [TODO]: ['# To-do', ...done(20)].join('\n') }
   engine(on, files, [])
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  expect((await ui.find({ type: 'Text', text: /3 OF 7/ }))?.text).toBe('3 OF 7')
   const svgs = await ui.findAll({ type: 'Svg' })
-  const ladder: any = svgs.find((s: any) => /Hopper unlocked/.test(s.props?.alt ?? ''))
-  expect(ladder?.props?.alt).toContain('Courier locked until level 4')
-  expect(ladder?.props?.isInteractive).toBeUndefined()
+  expect(svgs.length).toBe(1) // the level card only: no badges
+  const card: any = svgs[0]
+  expect(card?.props?.alt).toContain('Level 3')
+  expect(card?.props?.alt).toContain('Hopper unlocked')
+  expect(card?.props?.alt).toContain('Courier locked until level 4')
+  expect(card?.props?.source).toContain('CLAWDS')
+  expect(card?.props?.isInteractive).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /BADGES/ })).toBeUndefined()
   await ui.unmount()
 })
 
