@@ -479,7 +479,6 @@ async function drawPanel($: any, e: any) {
         {hasSvg ? (
           <Svg
             source={badgesSvg(g.badges)}
-            isInteractive
             alt={g.badges.map(b => `${b.name} ${b.isUnlocked ? 'unlocked' : 'locked'}`).join(', ')}
           />
         ) : (
