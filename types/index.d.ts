@@ -7,6 +7,8 @@ export type TodoItem = {
   kind: TodoKind
   context: string
   isDone: boolean
+  /** `- [/]`: started, not done yet */
+  isStarted: boolean
   /** YYYY-MM-DD from the line's ✅ mark, '' when unknown */
   doneDate: string
 }

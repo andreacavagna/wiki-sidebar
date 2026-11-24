@@ -34,6 +34,10 @@ for (const surface of ['terminal', 'desktop'] as const) {
     on('session.start', (_: any, e: any) => ({ cwd: e.cwd }))
     on('fs.exists', (_: any, e: any) => ({ value: e.path in files }))
     on('fs.read', (_: any, e: any) => ({ value: files[e.path] ?? '' }))
+    on('fs.write', (_: any, e: any) => {
+      files[e.path] = e.text
+      return { value: undefined }
+    })
     on('prompt.submit', (_: any, e: any) => {
       prompts.push(e)
       return { text: e.text }
@@ -51,7 +55,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
       'Start working on: Send David the Michelin doc (https://tripadvisor.enterprise.slack.com/team/UMZ4WFWBT) · Andrea x David, 17 Nov',
     )
     expect(prompts[0].text).toContain('drafts only')
-    expect(files[TODO]).toBe(SEED)
+    expect(files[TODO]).toBe(SEED.replace('- [ ] [Send David', '- [/] [Send David')) // Start marks it in progress, never done
     await ui.unmount()
   })
 }

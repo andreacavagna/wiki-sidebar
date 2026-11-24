@@ -44,7 +44,7 @@ const VAULT = '/Users/andreacavagna/Documents/LLM-Wiki'
 const ROOTS = [VAULT, '.', '/home/user/llm-wiki']
 const TODO_FILE = 'todo.md'
 
-const snapshot = atom({ plugin: 'wiki-sidebar', key: 'snapshot' } as const, null, { shape: 'snapshot-3' })
+const snapshot = atom({ plugin: 'wiki-sidebar', key: 'snapshot' } as const, null, { shape: 'snapshot-4' })
 const busy = atom({ plugin: 'wiki-sidebar', key: 'busy' } as const, false)
 const showDone = atom({ plugin: 'wiki-sidebar', key: 'showDone' } as const, false)
 
@@ -86,7 +86,7 @@ function kindOf(url: string): TodoKind | null {
   return null
 }
 
-const LINE = /^(\s*)- \[( |x|X)\] \[([^\]]+)\]\((\S+?)\)(.*)$/
+const LINE = /^(\s*)- \[( |x|X|\/)\] \[([^\]]+)\]\((\S+?)\)(.*)$/
 
 function parseLine(line: string): TodoItem | null {
   const m = LINE.exec(line)
@@ -101,7 +101,7 @@ function parseLine(line: string): TodoItem | null {
     .replace(/✅\s*\d{4}-\d{2}-\d{2}/, '')
     .replace(/^\s*[·—–-]\s*/, '')
     .trim()
-  return { id: hash(text + url), text, url, kind, context, isDone: m[2] !== ' ', doneDate }
+  return { id: hash(text + url), text, url, kind, context, isDone: m[2] === 'x' || m[2] === 'X', isStarted: m[2] === '/', doneDate }
 }
 
 async function findRoot($: any): Promise<string> {
@@ -169,8 +169,8 @@ async function toggleDone($: any, id: string) {
   const doneCount = (ls: string[]) => ls.map(parseLine).filter(t => t?.isDone).length
   const levelBefore = levelOf(doneCount(lines) * XP_PER_TODO)
   const line = lines[at] ?? ''
-  if (/^(\s*)- \[ \]/.test(line)) {
-    lines[at] = `${line.replace(/^(\s*)- \[ \]/, '$1- [x]').trimEnd()} ✅ ${today()}`
+  if (/^(\s*)- \[[ /]\]/.test(line)) {
+    lines[at] = `${line.replace(/^(\s*)- \[[ /]\]/, '$1- [x]').trimEnd()} ✅ ${today()}`
     isNowDone = true
   } else {
     lines[at] = line.replace(/^(\s*)- \[[xX]\]/, '$1- [ ]').replace(/\s*✅\s*\d{4}-\d{2}-\d{2}/, '')
@@ -186,6 +186,26 @@ async function toggleDone($: any, id: string) {
   } else {
     void $.ui.toast(`Quest complete: +${XP_PER_TODO} XP`)
   }
+}
+
+/** Mark a to-do in progress (`- [/]`, the Obsidian Tasks convention) or back to not started (`- [ ]`). */
+async function setStarted($: any, id: string, isStarted: boolean) {
+  const root = await findRoot($)
+  const path = join(root, TODO_FILE)
+  const text: string = await $.fs.read(path)
+  const lines = text.split('\n')
+  const at = lines.findIndex(l => parseLine(l)?.id === id)
+  if (at < 0) {
+    void $.ui.toast('That to-do changed in todo.md; refreshed the list')
+    await refresh($)
+    return
+  }
+  const line = lines[at] ?? ''
+  const from = isStarted ? /^(\s*)- \[ \]/ : /^(\s*)- \[\/\]/
+  if (!from.test(line)) return refresh($)
+  lines[at] = line.replace(from, isStarted ? '$1- [/]' : '$1- [ ]')
+  await $.fs.write(path, lines.join('\n'))
+  await refresh($)
 }
 
 async function openLink($: any, url: string) {
@@ -212,13 +232,15 @@ function startPrompt(t: TodoItem): string {
 
 function startTodo($: any, t: TodoItem) {
   askClaude($, startPrompt(t))
-  void $.ui.toast(`Started: ${cut(t.text, 40)}`)
+  if (!t.isStarted) void setStarted($, t.id, true)
+  void $.ui.toast(`${t.isStarted ? 'Continuing' : 'Started'}: ${cut(t.text, 40)}`)
 }
 
 // ---------- derived game state ----------
 
 function gameOf(snap: Snapshot) {
-  const open = snap.todos.filter(t => !t.isDone)
+  // in-progress first, then the rest in file order
+  const open = snap.todos.filter(t => !t.isDone).sort((a, b) => Number(b.isStarted) - Number(a.isStarted))
   const closed = snap.todos.filter(t => t.isDone)
   const xp = closed.length * XP_PER_TODO
   const level = levelOf(xp)
@@ -228,7 +250,8 @@ function gameOf(snap: Snapshot) {
   const doneToday = closed.filter(t => t.doneDate === today()).length
   const streak = streakFrom(new Set(closed.map(t => t.doneDate).filter(Boolean)))
   const openBy = (k: TodoKind) => open.filter(t => t.kind === k).length
-  return { xp, level, floor, ceil, title, open, closed, doneToday, streak, openBy }
+  const started = open.filter(t => t.isStarted).length
+  return { xp, level, floor, ceil, title, open, closed, doneToday, streak, openBy, started }
 }
 
 // ---------- text fallback ----------
@@ -240,7 +263,7 @@ function textReport(snap: Snapshot): string {
   lines.push(`TO-DO · Lv ${g.level} ${g.title} · ${g.xp} XP · 🔥 ${g.streak}-day streak · ${g.doneToday} done today · Clawd: ${clawdFor(g.level).name}`)
   lines.push('')
   if (g.open.length === 0) lines.push('☐ nothing pending')
-  g.open.forEach(t => lines.push(`☐ [${KIND[t.kind].label}] ${t.text}${t.context ? ` (${t.context})` : ''}\n   ${t.url}`))
+  g.open.forEach(t => lines.push(`${t.isStarted ? '◐' : '☐'} [${KIND[t.kind].label}]${t.isStarted ? ' IN PROGRESS' : ''} ${t.text}${t.context ? ` (${t.context})` : ''}\n   ${t.url}`))
   return lines.join('\n')
 }
 
@@ -306,7 +329,7 @@ function heroSvg(g: ReturnType<typeof gameOf>) {
   </defs>
   <rect x="0.5" y="0.5" width="${W - 1}" height="${H - 1}" rx="14" fill="${C.tile}" stroke="${C.tileLine}"/>
   <rect x="0.5" y="0.5" width="${W - 1}" height="${H - 1}" rx="14" fill="url(#glow)"/>
-  <text x="20" y="30" font-family="${MONO}" font-size="10" letter-spacing="2" fill="${C.coral}">◆ TO-DO · ${g.open.length} OPEN · ${g.doneToday} TODAY</text>
+  <text x="20" y="30" font-family="${MONO}" font-size="10" letter-spacing="2" fill="${C.coral}">◆ TO-DO · ${g.open.length} OPEN · ${g.started} STARTED · ${g.doneToday} TODAY</text>
   <text x="20" y="66" font-family="${SANS}" font-size="28" font-weight="700" fill="${C.ink}">Level ${g.level}</text>
   <text x="20" y="96" font-family="${SANS}" font-size="24" font-weight="700" fill="${C.coral}">${esc(g.title)}.</text>
   <g transform="translate(${bigX.toFixed(1)} 50) scale(${big})"><g>${current.motion}${clawdArt(current)}</g></g>
@@ -542,16 +565,23 @@ async function drawPanel($: any, e: any) {
             gap={1}
             alignItems="flex-start"
             borderStyle="round"
-            borderColor={C.tileLine}
+            borderColor={t.isStarted ? C.coral : C.tileLine}
             paddingX={1}
           >
             <Button key={`done-${t.id}`} plain onPress={() => void toggleDone($, t.id)}>
-              ☐
+              {t.isStarted ? '◐' : '☐'}
             </Button>
             <Box flexDirection="column" flexGrow={1} flexShrink={1}>
-              <Text mono size="caption" weight="bold" color={KIND[t.kind].color}>
-                {KIND[t.kind].label}
-              </Text>
+              <Box flexDirection="row" gap={1}>
+                <Text mono size="caption" weight="bold" color={KIND[t.kind].color}>
+                  {KIND[t.kind].label}
+                </Text>
+                {t.isStarted ? (
+                  <Text mono size="caption" weight="bold" color={C.coral}>
+                    · IN PROGRESS
+                  </Text>
+                ) : null}
+              </Box>
               <Text>{cut(t.text, textLen)}</Text>
               {t.context ? (
                 <Text mono size="caption" color={C.muted}>
@@ -560,7 +590,10 @@ async function drawPanel($: any, e: any) {
               ) : null}
               <Box flexDirection="row" gap={1} flexWrap="wrap">
                 <Button key={`start-${t.id}`} variant="primary" onPress={() => startTodo($, t)}>
-                  ▶ Start
+                  {t.isStarted ? '▶ Continue' : '▶ Start'}
+                </Button>
+                <Button key={`progress-${t.id}`} plain dimColor onPress={() => void setStarted($, t.id, !t.isStarted)}>
+                  {t.isStarted ? '○ Not started' : '◐ In progress'}
                 </Button>
                 <Button key={`open-${t.id}`} plain onPress={() => void openLink($, t.url)}>
                   ↗ {KIND[t.kind].open}
