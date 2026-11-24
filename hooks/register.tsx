@@ -166,6 +166,8 @@ async function toggleDone($: any, id: string) {
     await refresh($)
     return
   }
+  const doneCount = (ls: string[]) => ls.map(parseLine).filter(t => t?.isDone).length
+  const levelBefore = levelOf(doneCount(lines) * XP_PER_TODO)
   const line = lines[at] ?? ''
   if (/^(\s*)- \[ \]/.test(line)) {
     lines[at] = `${line.replace(/^(\s*)- \[ \]/, '$1- [x]').trimEnd()} ✅ ${today()}`
@@ -175,7 +177,15 @@ async function toggleDone($: any, id: string) {
   }
   await $.fs.write(path, lines.join('\n'))
   await refresh($)
-  if (isNowDone) void $.ui.toast(`Quest complete: +${XP_PER_TODO} XP`)
+  if (!isNowDone) return
+  const levelAfter = levelOf(doneCount(lines) * XP_PER_TODO)
+  if (levelAfter > levelBefore && levelAfter <= CLAWDS.length) {
+    void $.ui.toast(`Level ${levelAfter}! New Clawd unlocked: ${clawdFor(levelAfter).name}`)
+  } else if (levelAfter > levelBefore) {
+    void $.ui.toast(`Level ${levelAfter}! ${clawdFor(levelAfter).name} Clawd still reigns`)
+  } else {
+    void $.ui.toast(`Quest complete: +${XP_PER_TODO} XP`)
+  }
 }
 
 async function openLink($: any, url: string) {
@@ -236,7 +246,7 @@ function textReport(snap: Snapshot): string {
   if (snap.error) return `To-do: ${snap.error}`
   const g = gameOf(snap)
   const lines: string[] = []
-  lines.push(`TO-DO · Lv ${g.level} ${g.title} · ${g.xp} XP · 🔥 ${g.streak}-day streak · ${g.doneToday} done today`)
+  lines.push(`TO-DO · Lv ${g.level} ${g.title} · ${g.xp} XP · 🔥 ${g.streak}-day streak · ${g.doneToday} done today · Clawd: ${clawdFor(g.level).name}`)
   lines.push('')
   if (g.open.length === 0) lines.push('☐ nothing pending')
   g.open.forEach(t => lines.push(`☐ [${KIND[t.kind].label}] ${t.text}${t.context ? ` (${t.context})` : ''}\n   ${t.url}`))
@@ -330,6 +340,156 @@ function badgesSvg(badges: Badge[]) {
     `<rect x="0.5" y="0.5" width="${W - 1}" height="${H - 1}" rx="12" fill="${C.tile}" stroke="${C.tileLine}"/>${items}`,
   )
 }
+
+// ---------- Clawds: one animated Clawd unlocked per level ----------
+
+type Clawd = { name: string; body: string; extra: string; motion: string }
+
+const P = 4 // one Clawd pixel in SVG units
+const px = (x: number, y: number, w: number, h: number, fill: string, more = '') =>
+  `<rect x="${x * P}" y="${y * P}" width="${w * P}" height="${h * P}" fill="${fill}" ${more}/>`
+const loop = (attr: string, values: string, dur: string, extra = '') =>
+  `<animate attributeName="${attr}" values="${values}" dur="${dur}" repeatCount="indefinite" ${extra}/>`
+const move = (values: string, dur: string, extra = '') =>
+  `<animateTransform attributeName="transform" type="translate" values="${values}" dur="${dur}" repeatCount="indefinite" ${extra}/>`
+
+const EYE = '#2b2420'
+const blinkEyes = (color = EYE) =>
+  [4, 9]
+    .map(
+      x =>
+        `<rect x="${x * P}" y="${2 * P}" width="${P}" height="${2 * P}" fill="${color}">${loop('height', `${2 * P};${2 * P};1;${2 * P}`, '3.2s', 'keyTimes="0;0.9;0.95;1"')}${loop('y', `${2 * P};${2 * P};${3.5 * P};${2 * P}`, '3.2s', 'keyTimes="0;0.9;0.95;1"')}</rect>`,
+    )
+    .join('')
+
+/** Clawd's own shape: body, two arms, four legs. Arms and legs come as separate groups so they can move. */
+function clawdShape(body: string, opts: { leftArm?: string; rightArm?: string; legsA?: string; legsB?: string; eyes?: string } = {}) {
+  return [
+    px(2, 0, 10, 6, body),
+    `<g>${px(0, 2, 2, 2, body)}${opts.leftArm ?? ''}</g>`,
+    `<g>${px(12, 2, 2, 2, body)}${opts.rightArm ?? ''}</g>`,
+    `<g>${px(3, 6, 1, 2, body)}${px(8, 6, 1, 2, body)}${opts.legsA ?? ''}</g>`,
+    `<g>${px(5, 6, 1, 2, body)}${px(10, 6, 1, 2, body)}${opts.legsB ?? ''}</g>`,
+    opts.eyes ?? blinkEyes(),
+  ].join('')
+}
+
+const CORAL = '#D97757'
+const GOLDC = '#E8B04B'
+
+const CLAWDS: Clawd[] = [
+  // Lv 1: the plain one, breathing
+  { name: 'Hatchling', body: CORAL, extra: '', motion: move('0 0;0 -2;0 0', '1.6s') },
+  // Lv 2: waves hello
+  { name: 'Waver', body: CORAL, extra: 'wave', motion: move('0 0;0 -1;0 0', '1.6s') },
+  // Lv 3: headband, hops
+  {
+    name: 'Hopper',
+    body: CORAL,
+    extra: `${px(2, 0, 10, 1, '#c9483b')}${px(12, 0, 2, 1, '#c9483b')}${px(13, 1, 1, 1, '#c9483b')}`,
+    motion: move('0 0;0 -10;0 0;0 0', '1s', 'keyTimes="0;0.3;0.6;1"'),
+  },
+  // Lv 4: carries a parcel and walks
+  {
+    name: 'Courier',
+    body: CORAL,
+    extra: `${px(4, -4, 6, 4, '#a9773f')}${px(6.5, -4, 1, 4, '#7d5528')}${px(4, -2.5, 6, 1, '#7d5528')}`,
+    motion: move('-8 0;8 0;-8 0', '2.4s'),
+  },
+  // Lv 5: shades and headset
+  {
+    name: 'Operator',
+    body: CORAL,
+    extra: `${px(3, 2, 8, 1.4, '#111')}${px(1.5, -1.5, 11, 1, '#3a3632')}${px(1.5, -1.5, 1, 3, '#3a3632')}${px(11.5, -1.5, 1, 3, '#3a3632')}${px(11.5, 3.2, 2.5, 0.8, '#3a3632')}`,
+    motion: move('0 0;0 -1;0 0', '0.5s'),
+  },
+  // Lv 6: antenna with a beacon, glowing eyes
+  {
+    name: 'Mecha',
+    body: '#B5603F',
+    extra: `${px(6.5, -3, 1, 3, '#8F8A82')}<rect x="${6 * P}" y="${-4.5 * P}" width="${2 * P}" height="${2 * P}" fill="#E8B04B">${loop('opacity', '1;0.2;1', '1s')}</rect>${px(2, 4.5, 10, 0.6, '#8F8A82')}`,
+    motion: move('0 0;1 0;-1 0;0 0', '0.4s'),
+  },
+  // Lv 7+: gold, crowned, sparkling
+  {
+    name: 'Legend',
+    body: GOLDC,
+    extra: `${px(3, -2, 8, 2, '#f2c14e')}${px(3, -3.5, 1, 1.5, '#f2c14e')}${px(6.5, -3.5, 1, 1.5, '#f2c14e')}${px(10, -3.5, 1, 1.5, '#f2c14e')}${px(6.5, -1.5, 1, 1, '#c9483b')}${[
+      [-2, -3, '0s'],
+      [15, 0, '0.6s'],
+      [-1.5, 6, '1.1s'],
+      [15.5, 6.5, '0.3s'],
+    ]
+      .map(([x, y, d]) => `<rect x="${Number(x) * P}" y="${Number(y) * P}" width="${P}" height="${P}" fill="#fff6d8" opacity="0">${loop('opacity', '0;1;0', '1.4s', `begin="${d}"`)}</rect>`)
+      .join('')}`,
+    motion: move('0 0;0 -4;0 0', '2s'),
+  },
+]
+
+function clawdArt(c: Clawd): string {
+  const swing = (id: string, values: string, dur: string) => `<g>${move(values, dur)}${id}</g>`
+  if (c.extra === 'wave') {
+    // right arm lifts and waves
+    return clawdShape(c.body).replace(px(12, 2, 2, 2, c.body), swing(px(12, 2, 2, 2, c.body), '0 0;0 -8;0 -4;0 -8;0 0', '1.2s'))
+  }
+  if (c.name === 'Courier') {
+    const body = clawdShape(c.body)
+      .replace(`${px(3, 6, 1, 2, c.body)}${px(8, 6, 1, 2, c.body)}`, swing(`${px(3, 6, 1, 2, c.body)}${px(8, 6, 1, 2, c.body)}`, '0 0;0 -3;0 0;0 0', '0.4s'))
+      .replace(px(0, 2, 2, 2, c.body), px(0, -1, 2, 4, c.body))
+      .replace(px(12, 2, 2, 2, c.body), px(12, -1, 2, 4, c.body))
+    return body + c.extra
+  }
+  if (c.name === 'Operator') {
+    const body = clawdShape(c.body)
+      .replace(px(0, 2, 2, 2, c.body), swing(px(0, 2, 2, 2, c.body), '0 0;0 2;0 0', '0.25s'))
+      .replace(px(12, 2, 2, 2, c.body), swing(px(12, 2, 2, 2, c.body), '0 2;0 0;0 2', '0.25s'))
+    return body + c.extra
+  }
+  if (c.name === 'Mecha') {
+    const glow = [4, 9]
+      .map(x => `<rect x="${x * P}" y="${2 * P}" width="${P}" height="${2 * P}" fill="#7fe3ff">${loop('fill', '#7fe3ff;#ffffff;#7fe3ff', '1.2s')}</rect>`)
+      .join('')
+    return clawdShape(c.body, { eyes: glow }) + c.extra
+  }
+  return clawdShape(c.body) + c.extra
+}
+
+/** The ladder: Clawd n unlocks at level n; the last one keeps every level after it. */
+function clawdsSvg(level: number) {
+  const perRow = 4
+  const cw = W / perRow
+  const rowH = 104
+  const H = Math.ceil(CLAWDS.length / perRow) * rowH + 8
+  const artW = 14 * P
+  const items = CLAWDS.map((c, i) => {
+    const lv = i + 1
+    const on = level >= lv
+    const isCurrent = on && (lv === level || (lv === CLAWDS.length && level > CLAWDS.length))
+    const col = i % perRow
+    const row = Math.floor(i / perRow)
+    // centre the last, shorter row
+    const inRow = Math.min(perRow, CLAWDS.length - row * perRow)
+    const x0 = (W - inRow * cw) / 2 + col * cw
+    const cx = x0 + cw / 2
+    const top = row * rowH + 8
+    const scale = 0.9
+    const ax = cx - (artW * scale) / 2
+    const ay = top + 26
+    const art = on
+      ? `<g transform="translate(${ax.toFixed(1)} ${ay}) scale(${scale})"><g>${c.motion}${clawdArt(c)}</g></g>`
+      : `<g transform="translate(${ax.toFixed(1)} ${ay}) scale(${scale})" opacity="0.5">${clawdShape(C.tileLine, { eyes: '' })}</g>
+         <text x="${cx}" y="${ay + 22}" text-anchor="middle" font-family="${MONO}" font-size="14" font-weight="700" fill="${C.muted}">?</text>`
+    const frame = isCurrent
+      ? `<rect x="${(x0 + 4).toFixed(1)}" y="${top}" width="${cw - 8}" height="${rowH - 8}" rx="10" fill="${C.coralSoft}" stroke="${C.coral}" stroke-width="1.5"/>`
+      : ''
+    return `<g><title>${esc(on ? `${c.name}, unlocked at level ${lv}` : `Unlocks at level ${lv}`)}</title>${frame}${art}
+    <text x="${cx}" y="${top + rowH - 30}" text-anchor="middle" font-family="${MONO}" font-size="8.5" letter-spacing="0.8" fill="${on ? C.ink : C.muted}">${esc(on ? c.name.toUpperCase() : 'LOCKED')}</text>
+    <text x="${cx}" y="${top + rowH - 18}" text-anchor="middle" font-family="${MONO}" font-size="7.5" fill="${isCurrent ? C.coral : C.muted}">LV ${lv}${lv === CLAWDS.length ? '+' : ''}</text></g>`
+  }).join('\n')
+  return svgRoot(H, `<rect x="0.5" y="0.5" width="${W - 1}" height="${H - 1}" rx="12" fill="${C.tile}" stroke="${C.tileLine}"/>${items}`)
+}
+
+const clawdFor = (level: number) => CLAWDS[Math.min(level, CLAWDS.length) - 1] ?? CLAWDS[0]!
 
 // ---------- drawing ----------
 
@@ -471,6 +631,21 @@ async function drawPanel($: any, e: any) {
               </Box>
             </Box>
           ))}
+      </Box>
+
+      {/* Clawds: one per level */}
+      <Box flexDirection="column" gap={1}>
+        {SectionHeader(E, 'CLAWDS', `${Math.min(g.level, CLAWDS.length)} OF ${CLAWDS.length}`)}
+        {hasSvg ? (
+          <Svg
+            source={clawdsSvg(g.level)}
+            alt={CLAWDS.map((c, i) => `${c.name} ${g.level >= i + 1 ? 'unlocked' : `locked until level ${i + 1}`}`).join(', ')}
+          />
+        ) : (
+          <Text>
+            {CLAWDS.map((c, i) => (g.level >= i + 1 ? `👾 ${c.name}` : `🔒 Lv ${i + 1}`)).join('  ')}
+          </Text>
+        )}
       </Box>
 
       {/* Badges */}
