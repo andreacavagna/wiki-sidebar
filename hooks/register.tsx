@@ -1,8 +1,9 @@
 import { atom, read, update } from 'claude-code'
 import type { Register, ThemeSetArgs } from 'claude-code'
 
-import type { Snapshot, TodoItem, TodoKind } from '../types'
+import type { MeetingItem, MeetingsSnapshot, Snapshot, TodoItem, TodoKind } from '../types'
 import { makeColors } from './make-colors.js'
+import { dayIn, fetchMeetings, isLive, isPast, prepDayPrompt, prepPrompt } from './meetings'
 
 // "Ember quest": warm charcoal by night, warm paper by day, coral accent (matches the quest board tiles).
 const { theme: emberColors, problems: lookProblems } = makeColors({
@@ -47,6 +48,14 @@ const TODO_FILE = 'todo.md'
 const snapshot = atom({ plugin: 'wiki-sidebar', key: 'snapshot' } as const, null, { shape: 'snapshot-4' })
 const busy = atom({ plugin: 'wiki-sidebar', key: 'busy' } as const, false)
 const showDone = atom({ plugin: 'wiki-sidebar', key: 'showDone' } as const, false)
+const meetings = atom({ plugin: 'wiki-sidebar', key: 'meetings' } as const, null, { shape: 'meetings-1' })
+const meetingsBusy = atom({ plugin: 'wiki-sidebar', key: 'meetingsBusy' } as const, false)
+// To-dos open by default, meetings folded: both toggle from their section header.
+const todosOpen = atom({ plugin: 'wiki-sidebar', key: 'todosOpen' } as const, true)
+const meetingsOpen = atom({ plugin: 'wiki-sidebar', key: 'meetingsOpen' } as const, false)
+const showPastMeetings = atom({ plugin: 'wiki-sidebar', key: 'showPastMeetings' } as const, false)
+// Re-read the calendar at the end of a turn when the last read is older than this.
+const MEETINGS_TTL_MS = 15 * 60 * 1000
 
 // ---------- game rules ----------
 
@@ -236,6 +245,55 @@ function startTodo($: any, t: TodoItem) {
   void $.ui.toast(`${t.isStarted ? 'Continuing' : 'Started'}: ${cut(t.text, 40)}`)
 }
 
+// ---------- meetings ----------
+
+/** Mark which meetings already have a prep note in the vault. */
+async function withPrepStatus($: any, ms: MeetingItem[]): Promise<MeetingItem[]> {
+  const root = await findRoot($).catch(() => VAULT)
+  return Promise.all(ms.map(async m => ({ ...m, hasPrep: Boolean(await $.fs.exists(join(root, m.prepPath)).catch(() => false)) })))
+}
+
+/** Re-read today's calendar (or, with `onlyPrep`, just re-check which prep notes exist). */
+async function refreshMeetings($: any, opts: { onlyPrep?: boolean } = {}) {
+  const day = dayIn()
+  const prev = await read($, meetings)
+  if (opts.onlyPrep && prev && !prev.error && prev.day === day) {
+    const next = await withPrepStatus($, prev.meetings)
+    await update($, meetings, () => ({ ...prev, meetings: next }))
+    return
+  }
+  await update($, meetingsBusy, () => true)
+  try {
+    const ms = await withPrepStatus($, await fetchMeetings($, day))
+    await update($, meetings, () => ({ day, meetings: ms, loadedAt: Date.now() }))
+  } catch (err: any) {
+    const error = String(err?.message ?? err)
+    // keep the last good list if there is one for today
+    await update($, meetings, () => (prev && prev.day === day && !prev.error ? { ...prev, error } : { day, meetings: [], loadedAt: Date.now(), error }))
+  } finally {
+    await update($, meetingsBusy, () => false)
+  }
+}
+
+function prepMeeting($: any, m: MeetingItem, day: string) {
+  askClaude($, prepPrompt(m, day))
+  void $.ui.toast(`Preparing: ${cut(m.title, 40)}`)
+}
+
+async function openPrep($: any, m: MeetingItem) {
+  const root = await findRoot($).catch(() => VAULT)
+  const abs = root.startsWith('/') ? `${root}/${m.prepPath}` : `${VAULT}/${m.prepPath}`
+  await openLink($, `obsidian://open?path=${encodeURIComponent(abs)}`)
+}
+
+const ROLE: Record<MeetingItem['role'], { label: string; color: string }> = {
+  host: { label: 'YOU HOST', color: '#D97757' },
+  'one-on-one': { label: '1:1', color: '#C08BE0' },
+  daily: { label: 'DAILY', color: '#9DB4D8' },
+  broadcast: { label: 'LISTEN-IN', color: '#8F8A82' },
+  meeting: { label: 'MEETING', color: '#E8B04B' },
+}
+
 // ---------- derived game state ----------
 
 function gameOf(snap: Snapshot) {
@@ -255,6 +313,16 @@ function gameOf(snap: Snapshot) {
 }
 
 // ---------- text fallback ----------
+
+function meetingsReport(ms: MeetingsSnapshot | null): string {
+  if (!ms) return 'MEETINGS TODAY · loading'
+  if (ms.error && ms.meetings.length === 0) return `MEETINGS TODAY · ${ms.error}`
+  const upcoming = ms.meetings.filter(m => !isPast(m))
+  const lines = [`MEETINGS TODAY · ${upcoming.length} to go`]
+  if (upcoming.length === 0) lines.push('  nothing left today')
+  upcoming.forEach(m => lines.push(`  ${m.startLabel} ${m.title} · ${m.cta}${m.hasPrep ? ' · prep ready' : ''}`))
+  return lines.join('\n')
+}
 
 function textReport(snap: Snapshot): string {
   if (snap.error) return `To-do: ${snap.error}`
@@ -469,13 +537,14 @@ const clawdFor = (level: number) => CLAWDS[Math.min(level, CLAWDS.length) - 1] ?
 
 // ---------- drawing ----------
 
-function SectionHeader(E: any, label: string, right: string) {
-  const { Box, Text } = E
+/** A section header that folds its section: ▾ open, ▸ folded, the summary on the right. */
+function SectionToggle(E: any, key: string, label: string, right: string, isOpen: boolean, onPress: () => void) {
+  const { Box, Button, Text } = E
   return (
-    <Box flexDirection="row" justifyContent="space-between" marginTop={1}>
-      <Text mono size="caption" weight="semibold" color={C.muted}>
-        {label}
-      </Text>
+    <Box flexDirection="row" justifyContent="space-between" alignItems="center" marginTop={1}>
+      <Button key={key} plain onPress={onPress}>
+        {`${isOpen ? '▾' : '▸'} ${label}`}
+      </Button>
       <Text mono size="caption" color={C.coral}>
         {right}
       </Text>
@@ -483,20 +552,10 @@ function SectionHeader(E: any, label: string, right: string) {
   )
 }
 
-async function drawPanel($: any, e: any) {
-  const E = $.ui.resolve(e) as any
+function drawTodos($: any, E: any, snap: Snapshot | null, isShowingDone: boolean, textLen: number) {
   const { Box, Text, Button, Progress } = E
   const Svg = E.Svg
-  const hasSvg = Boolean(Svg)
-  const snap = await read($, snapshot)
-  const isBusy = await read($, busy)
-  const isShowingDone = await read($, showDone)
-  const cols = Math.max(24, (e.props as any)?.bodyColumns ?? e.viewport?.columns ?? 60)
-  const isWidget = (e.props as any)?.placement === 'widget'
-  const textLen = Math.max(40, cols * 2 - 12)
-
   if (!snap) return <Text dimColor>Loading your to-dos…</Text>
-
   if (snap.error) {
     return (
       <Box flexDirection="column" gap={1}>
@@ -507,28 +566,12 @@ async function drawPanel($: any, e: any) {
       </Box>
     )
   }
-
   const g = gameOf(snap)
-
-  if (isWidget) {
-    return (
-      <Box flexDirection="column">
-        <Text bold>
-          Lv {g.level} <Text color={C.coral}>{g.title}</Text> · 🔥 {g.streak}
-        </Text>
-        <Text dimColor>
-          {g.open.length} to do · {g.doneToday} done today
-        </Text>
-      </Box>
-    )
-  }
-
   const total = g.open.length + g.doneToday
-
   return (
     <Box flexDirection="column" gap={1}>
       {/* Hero */}
-      {hasSvg ? (
+      {Svg ? (
         <Svg
           source={heroSvg(g)}
           alt={`Level ${g.level} ${g.title}, ${g.xp} XP, ${g.open.length} open, ${g.doneToday} done today, ${g.streak}-day streak. Clawds: ${CLAWDS.map((c, i) => (g.level >= i + 1 ? `${c.name} unlocked` : `${c.name} locked until level ${i + 1}`)).join(', ')}`}
@@ -544,88 +587,261 @@ async function drawPanel($: any, e: any) {
           <Progress label={`XP to level ${g.level + 1}`} value={g.xp - g.floor} max={g.ceil - g.floor} valueText={`${g.xp} XP`} color={C.coral} />
         </Box>
       )}
-
-      {/* To do */}
-      <Box flexDirection="column" gap={1}>
-        {SectionHeader(E, `TO DO · ${g.open.length}`, `+${XP_PER_TODO} XP EACH`)}
-        {total > 0 && (
-          <Progress
-            label="Today"
-            value={g.doneToday}
-            max={total}
-            valueText={`${g.doneToday} of ${total} done today`}
-            color={C.green}
-          />
-        )}
-        {g.open.length === 0 && <Text color={C.green}>Nothing pending. 🏆</Text>}
-        {g.open.map(t => (
-          <Box
-            key={`q-${t.id}`}
-            flexDirection="row"
-            gap={1}
-            alignItems="flex-start"
-            borderStyle="round"
-            borderColor={t.isStarted ? C.coral : C.tileLine}
-            paddingX={1}
-          >
-            <Button key={`done-${t.id}`} plain onPress={() => void toggleDone($, t.id)}>
-              {t.isStarted ? '◐' : '☐'}
-            </Button>
-            <Box flexDirection="column" flexGrow={1} flexShrink={1}>
-              <Box flexDirection="row" gap={1}>
-                <Text mono size="caption" weight="bold" color={KIND[t.kind].color}>
-                  {KIND[t.kind].label}
-                </Text>
-                {t.isStarted ? (
-                  <Text mono size="caption" weight="bold" color={C.coral}>
-                    · IN PROGRESS
-                  </Text>
-                ) : null}
-              </Box>
-              <Text>{cut(t.text, textLen)}</Text>
-              {t.context ? (
-                <Text mono size="caption" color={C.muted}>
-                  {cut(t.context, 60)}
+      {total > 0 && (
+        <Progress label="Today" value={g.doneToday} max={total} valueText={`${g.doneToday} of ${total} done today`} color={C.green} />
+      )}
+      {g.open.length === 0 && <Text color={C.green}>Nothing pending. 🏆</Text>}
+      {g.open.map(t => (
+        <Box
+          key={`q-${t.id}`}
+          flexDirection="row"
+          gap={1}
+          alignItems="flex-start"
+          borderStyle="round"
+          borderColor={t.isStarted ? C.coral : C.tileLine}
+          paddingX={1}
+        >
+          <Button key={`done-${t.id}`} plain onPress={() => void toggleDone($, t.id)}>
+            {t.isStarted ? '◐' : '☐'}
+          </Button>
+          <Box flexDirection="column" flexGrow={1} flexShrink={1}>
+            <Box flexDirection="row" gap={1}>
+              <Text mono size="caption" weight="bold" color={KIND[t.kind].color}>
+                {KIND[t.kind].label}
+              </Text>
+              {t.isStarted ? (
+                <Text mono size="caption" weight="bold" color={C.coral}>
+                  · IN PROGRESS
                 </Text>
               ) : null}
-              <Box flexDirection="row" gap={1} flexWrap="wrap">
-                <Button key={`start-${t.id}`} variant="primary" onPress={() => startTodo($, t)}>
-                  {t.isStarted ? '▶ Continue' : '▶ Start'}
-                </Button>
-                <Button key={`progress-${t.id}`} plain dimColor onPress={() => void setStarted($, t.id, !t.isStarted)}>
-                  {t.isStarted ? '○ Not started' : '◐ In progress'}
-                </Button>
-                <Button key={`open-${t.id}`} plain onPress={() => void openLink($, t.url)}>
-                  ↗ {KIND[t.kind].open}
-                </Button>
-              </Box>
+            </Box>
+            <Text>{cut(t.text, textLen)}</Text>
+            {t.context ? (
+              <Text mono size="caption" color={C.muted}>
+                {cut(t.context, 60)}
+              </Text>
+            ) : null}
+            <Box flexDirection="row" gap={1} flexWrap="wrap">
+              <Button key={`start-${t.id}`} variant="primary" onPress={() => startTodo($, t)}>
+                {t.isStarted ? '▶ Continue' : '▶ Start'}
+              </Button>
+              <Button key={`progress-${t.id}`} plain dimColor onPress={() => void setStarted($, t.id, !t.isStarted)}>
+                {t.isStarted ? '○ Not started' : '◐ In progress'}
+              </Button>
+              <Button key={`open-${t.id}`} plain onPress={() => void openLink($, t.url)}>
+                ↗ {KIND[t.kind].open}
+              </Button>
+            </Box>
+          </Box>
+        </Box>
+      ))}
+      {g.closed.length > 0 && (
+        <Button key="toggle-done" plain dimColor onPress={() => void update($, showDone, v => !v)}>
+          {isShowingDone ? '▾' : '▸'} {g.closed.length} done
+        </Button>
+      )}
+      {isShowingDone &&
+        g.closed.map(t => (
+          <Box key={`c-${t.id}`} flexDirection="row" gap={1} paddingX={1}>
+            <Button key={`undo-${t.id}`} plain dimColor onPress={() => void toggleDone($, t.id)}>
+              ☑
+            </Button>
+            <Box flexGrow={1} flexShrink={1}>
+              <Text dimColor strikethrough>
+                {cut(t.text, textLen)}
+              </Text>
             </Box>
           </Box>
         ))}
-        {g.closed.length > 0 && (
-          <Button key="toggle-done" plain dimColor onPress={() => void update($, showDone, v => !v)}>
-            {isShowingDone ? '▾' : '▸'} {g.closed.length} done
-          </Button>
-        )}
-        {isShowingDone &&
-          g.closed.map(t => (
-            <Box key={`c-${t.id}`} flexDirection="row" gap={1} paddingX={1}>
-              <Button key={`undo-${t.id}`} plain dimColor onPress={() => void toggleDone($, t.id)}>
-                ☑
-              </Button>
-              <Box flexGrow={1} flexShrink={1}>
-                <Text dimColor strikethrough>
-                  {cut(t.text, textLen)}
-                </Text>
-              </Box>
-            </Box>
-          ))}
+    </Box>
+  )
+}
+
+function MeetingCard($: any, E: any, m: MeetingItem, day: string, textLen: number, now: number) {
+  const { Box, Text, Button } = E
+  const live = isLive(m, now)
+  const past = isPast(m, now)
+  const role = ROLE[m.role]
+  return (
+    <Box
+      key={`m-${m.id}`}
+      flexDirection="column"
+      borderStyle="round"
+      borderColor={live ? C.coral : m.hasPrep ? C.green : C.tileLine}
+      paddingX={1}
+    >
+      <Box flexDirection="row" gap={1} flexWrap="wrap">
+        <Text mono size="caption" weight="bold" color={past ? C.muted : C.ink}>
+          {m.startLabel}–{m.endLabel}
+        </Text>
+        <Text mono size="caption" weight="bold" color={role.color}>
+          {role.label}
+        </Text>
+        {live ? (
+          <Text mono size="caption" weight="bold" color={C.coral}>
+            · NOW
+          </Text>
+        ) : null}
+        {m.hasPrep ? (
+          <Text mono size="caption" weight="bold" color={C.green}>
+            · PREP READY
+          </Text>
+        ) : null}
       </Box>
+      <Text dimColor={past}>{cut(m.title, textLen)}</Text>
+      {!past ? (
+        <Text mono size="caption" color={C.muted}>
+          → {cut(m.cta, 70)}
+        </Text>
+      ) : null}
+      {!past ? (
+        <Box flexDirection="row" gap={1} flexWrap="wrap">
+          {m.hasPrep ? (
+            <Button key={`prep-open-${m.id}`} variant="primary" onPress={() => void openPrep($, m)}>
+              ↗ Open prep
+            </Button>
+          ) : (
+            <Button
+              key={`prep-${m.id}`}
+              variant={m.role === 'broadcast' ? 'secondary' : 'primary'}
+              onPress={() => prepMeeting($, m, day)}
+            >
+              ▶ Prepare
+            </Button>
+          )}
+          {m.hasPrep ? (
+            <Button key={`prep-redo-${m.id}`} plain dimColor onPress={() => prepMeeting($, m, day)}>
+              ↻ Redo prep
+            </Button>
+          ) : null}
+          {m.callUrl ? (
+            <Button key={`join-${m.id}`} plain onPress={() => void openLink($, m.callUrl)}>
+              ↗ Join
+            </Button>
+          ) : null}
+          {m.link ? (
+            <Button key={`cal-${m.id}`} plain dimColor onPress={() => void openLink($, m.link)}>
+              ↗ Event
+            </Button>
+          ) : null}
+        </Box>
+      ) : null}
+    </Box>
+  )
+}
+
+function drawMeetings($: any, E: any, ms: MeetingsSnapshot | null, isShowingPast: boolean, isBusy: boolean, textLen: number) {
+  const { Box, Text, Button } = E
+  if (!ms) return <Text dimColor>{isBusy ? 'Reading your calendar…' : 'No calendar read yet.'}</Text>
+  const now = Date.now()
+  const past = ms.meetings.filter(m => isPast(m, now))
+  const upcoming = ms.meetings.filter(m => !isPast(m, now))
+  const unprepared = upcoming.filter(m => !m.hasPrep && m.role !== 'broadcast')
+  return (
+    <Box flexDirection="column" gap={1}>
+      {ms.error ? (
+        <Box flexDirection="column">
+          <Text color={C.coral}>{cut(ms.error, 160)}</Text>
+          <Button key="meetings-retry" plain onPress={() => void refreshMeetings($)}>
+            Retry
+          </Button>
+        </Box>
+      ) : null}
+      {!ms.error && upcoming.length === 0 ? <Text color={C.green}>No more meetings today.</Text> : null}
+      {upcoming.map(m => MeetingCard($, E, m, ms.day, textLen, now))}
+      {past.length > 0 && (
+        <Button key="toggle-past-meetings" plain dimColor onPress={() => void update($, showPastMeetings, v => !v)}>
+          {isShowingPast ? '▾' : '▸'} {past.length} earlier today
+        </Button>
+      )}
+      {isShowingPast && past.map(m => MeetingCard($, E, m, ms.day, textLen, now))}
+      <Box flexDirection="row" gap={1} flexWrap="wrap">
+        {unprepared.length > 1 ? (
+          <Button key="prep-day" variant="primary" onPress={() => askClaude($, prepDayPrompt(unprepared, ms.day))}>
+            ▶ Prep my day ({unprepared.length})
+          </Button>
+        ) : null}
+        <Button key="meetings-refresh" variant="secondary" onPress={() => void refreshMeetings($)}>
+          {isBusy ? 'Reading calendar…' : 'Refresh calendar'}
+        </Button>
+      </Box>
+    </Box>
+  )
+}
+
+async function drawPanel($: any, e: any) {
+  const E = $.ui.resolve(e) as any
+  const { Box, Text, Button } = E
+  const snap = await read($, snapshot)
+  const isBusy = await read($, busy)
+  const isShowingDone = await read($, showDone)
+  const ms = await read($, meetings)
+  const isMeetingsBusy = await read($, meetingsBusy)
+  const isTodosOpen = await read($, todosOpen)
+  const isMeetingsOpen = await read($, meetingsOpen)
+  const isShowingPast = await read($, showPastMeetings)
+  const cols = Math.max(24, (e.props as any)?.bodyColumns ?? e.viewport?.columns ?? 60)
+  const isWidget = (e.props as any)?.placement === 'widget'
+  const textLen = Math.max(40, cols * 2 - 12)
+  const now = Date.now()
+  const nextMeeting = ms?.meetings.find(m => !isPast(m, now))
+  const meetingsLeft = ms ? ms.meetings.filter(m => !isPast(m, now)).length : 0
+
+  if (isWidget) {
+    const g = snap && !snap.error ? gameOf(snap) : null
+    return (
+      <Box flexDirection="column">
+        {g ? (
+          <Text bold>
+            Lv {g.level} <Text color={C.coral}>{g.title}</Text> · 🔥 {g.streak}
+          </Text>
+        ) : null}
+        <Text dimColor>
+          {g ? `${g.open.length} to do · ${g.doneToday} done today` : 'To-dos loading'}
+          {nextMeeting ? ` · next ${nextMeeting.startLabel} ${cut(nextMeeting.title, 24)}` : ''}
+        </Text>
+      </Box>
+    )
+  }
+
+  const g = snap && !snap.error ? gameOf(snap) : null
+  const todoRight = g ? (isTodosOpen ? `+${XP_PER_TODO} XP EACH` : `LV ${g.level} · ${g.doneToday} TODAY`) : ''
+  const meetRight = ms?.error && !ms.meetings.length
+    ? 'CALENDAR ERROR'
+    : nextMeeting
+      ? `NEXT ${nextMeeting.startLabel}${isMeetingsOpen ? '' : ` · ${cut(nextMeeting.title, 18).toUpperCase()}`}`
+      : ms
+        ? 'DONE FOR TODAY'
+        : ''
+
+  return (
+    <Box flexDirection="column" gap={1}>
+      {/* To do: open by default */}
+      {SectionToggle(E, 'toggle-todos', `TO DO · ${g ? g.open.length : '…'}`, todoRight, isTodosOpen, () => void update($, todosOpen, v => !v))}
+      {isTodosOpen && drawTodos($, E, snap, isShowingDone, textLen)}
+
+      {/* Today's meetings: folded by default */}
+      {SectionToggle(
+        E,
+        'toggle-meetings',
+        `MEETINGS TODAY · ${ms ? meetingsLeft : '…'}`,
+        meetRight,
+        isMeetingsOpen,
+        () => void update($, meetingsOpen, v => !v),
+      )}
+      {isMeetingsOpen && drawMeetings($, E, ms, isShowingPast, isMeetingsBusy, textLen)}
 
       {/* Footer */}
-      <Box flexDirection="row" gap={1} flexWrap="wrap">
-        <Button key="refresh" variant="secondary" onPress={() => void refresh($)}>
-          {isBusy ? 'Refreshing…' : 'Refresh'}
+      <Box flexDirection="row" gap={1} flexWrap="wrap" marginTop={1}>
+        <Button
+          key="refresh"
+          variant="secondary"
+          onPress={() => {
+            void refresh($)
+            void refreshMeetings($)
+          }}
+        >
+          {isBusy || isMeetingsBusy ? 'Refreshing…' : 'Refresh'}
         </Button>
         <Button key="edit" variant="secondary" onPress={() => void openTodoFile($)}>
           Edit list
@@ -651,21 +867,22 @@ export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'wiki',
-      description: 'To-do quests: your Slack, Notion, artifact and Workday to-dos from todo.md',
+      description: "To-do quests: your to-dos from todo.md and today's meetings with what to prepare",
     })
     const unpainted = lookProblems.find(line => line.startsWith("Desktop won't paint"))
     if (unpainted !== undefined) void $.ui.toast(unpainted)
     void $.theme.set(LOOK)
     void $.ui.open({ id: PANE, title: TITLE })
-    void refresh($)
+    // to-dos first (local file), then the calendar (a network call)
+    void refresh($).then(() => refreshMeetings($))
     return next(e)
   })
 
   on('command.run', { command: 'wiki' }, async $ => {
-    await refresh($)
+    await Promise.all([refresh($), refreshMeetings($)])
     const opened: any = await $.ui.open({ id: PANE, title: TITLE })
     const snap = await read($, snapshot)
-    const report = snap ? textReport(snap) : 'To-do: still loading, run /wiki again.'
+    const report = `${snap ? textReport(snap) : 'To-do: still loading, run /wiki again.'}\n\n${meetingsReport(await read($, meetings))}`
     return { text: report + (opened?.isPlaced ? '\n\n(To-do quests opened beside the chat.)' : '') }
   })
 
@@ -680,10 +897,14 @@ export const register: Register = on => {
     return next({ ...e, context: [...(e.context ?? []), note] })
   })
 
-  // todo.md changes during a turn (the daily run, edits): reload when it ends
+  // todo.md and prep notes change during a turn (the daily run, a prep): reload when it ends;
+  // the calendar itself only when the last read is stale or from another day
   on('turn.complete', async ($, e, next) => {
     const result = await next(e)
     void refresh($)
+    const ms = await read($, meetings)
+    const isStale = !ms || ms.day !== dayIn() || Date.now() - ms.loadedAt > MEETINGS_TTL_MS
+    void refreshMeetings($, { onlyPrep: !isStale })
     return result
   })
 
