@@ -9,6 +9,8 @@ export type TodoItem = {
   isDone: boolean
   /** `- [/]`: started, not done yet */
   isStarted: boolean
+  /** `- [-]`: skipped from the sidebar (cancelled, no XP) */
+  isSkipped: boolean
   /** YYYY-MM-DD from the line's ✅ mark, '' when unknown */
   doneDate: string
 }
@@ -58,6 +60,18 @@ export type MeetingsSnapshot = {
   error?: string
 }
 
+/** What Andrea did with a meeting: done earns XP, skipped hides it for the day. */
+export type MeetingMark = {
+  status: 'done' | 'skipped'
+  /** YYYY-MM-DD in Europe/Rome */
+  day: string
+  title: string
+  at: number
+}
+
+/** Keyed by `${day}|${meeting id}`; kept in $.store across sessions. */
+export type MeetingLog = Record<string, MeetingMark>
+
 declare module 'claude-code' {
   interface PluginState {
     'wiki-sidebar': {
@@ -69,6 +83,8 @@ declare module 'claude-code' {
       todosOpen: boolean
       meetingsOpen: boolean
       showPastMeetings: boolean
+      meetingLog: Shaped<MeetingLog>
+      showMeetingsHandled: boolean
     }
   }
 }

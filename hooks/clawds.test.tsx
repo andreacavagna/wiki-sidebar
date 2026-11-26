@@ -49,13 +49,13 @@ test('the level card carries the Clawd ladder and the badges are gone (desktop)'
 
 test('crossing a level toasts the new Clawd (terminal)', async ($, on) => {
   const files = {
-    [TODO]: ['# To-do', '- [ ] [Ping Hamza](https://tripadvisor.enterprise.slack.com/team/U1)', ...done(4)].join('\n'),
+    [TODO]: ['# To-do', '- [/] [Ping Hamza](https://tripadvisor.enterprise.slack.com/team/U1)', ...done(4)].join('\n'),
   }
   const toasts: string[] = []
   engine(on, files, toasts)
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  const key = (await ui.findAll({ type: 'Button' })).find((b: any) => String(b.key).startsWith('done-'))?.key ?? ''
+  const key = (await ui.findAll({ type: 'Button' })).find((b: any) => String(b.key).startsWith('next-'))?.key ?? ''
   await ui.press({ key })
   expect(toasts.some(t => t.includes('Level 2! New Clawd unlocked: Waver'))).toBe(true)
   await ui.unmount()

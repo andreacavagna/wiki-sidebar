@@ -16,7 +16,7 @@ const PANE = {
 } as const
 
 for (const surface of ['terminal', 'desktop'] as const) {
-  test(`Start marks a to-do in progress, it moves first, and ticking it closes it (${surface})`, async ($, on) => {
+  test(`Start puts a to-do in progress and first, Done closes it, ✕ skips one and ↺ brings it back (${surface})`, async ($, on) => {
     const files: Record<string, string> = { [TODO]: SEED }
     on('command.register', () => ({ value: { command: 'wiki' } }))
     on('ui.open', () => ({ value: { isPlaced: true } }))
@@ -34,22 +34,30 @@ for (const surface of ['terminal', 'desktop'] as const) {
     await $.session.start({ cwd: '/', surface, isInteractive: true })
     const ui = await $.ui.mount({ ...PANE, surface })
 
-    const starts = (await ui.findAll({ type: 'Button' })).filter((b: any) => String(b.key).startsWith('start-'))
-    await ui.press({ key: starts[1]!.key })
-    await new Promise(r => setTimeout(r, 20))
+    const nexts = (await ui.findAll({ type: 'Button' })).filter((b: any) => String(b.key).startsWith('next-'))
+    expect(nexts.length).toBe(2)
+    const workdayKey = String(nexts[1]!.key)
+    const workdayId = workdayKey.slice('next-'.length)
+    await ui.press({ key: workdayKey })
     expect(files[TODO]).toContain('- [/] [Performance review')
     expect(await ui.find({ type: 'Text', text: /IN PROGRESS/ })).toBeDefined()
-    expect((await ui.find({ type: 'Button', text: /Continue/ }))?.text).toContain('Continue')
-    const first = (await ui.findAll({ type: 'Button' })).find((b: any) => String(b.key).startsWith('start-'))
-    const workdayId = String(first?.key).slice('start-'.length)
+    // in progress moves first and its button now says Done
+    const first = (await ui.findAll({ type: 'Button' })).find((b: any) => String(b.key).startsWith('next-'))
+    expect(first?.key).toBe(workdayKey)
+    expect(first?.text).toContain('Done')
 
-    await ui.press({ key: `progress-${workdayId}` })
-    expect(files[TODO]).toContain('- [ ] [Performance review')
-    await ui.press({ key: `progress-${workdayId}` })
-    expect(files[TODO]).toContain('- [/] [Performance review')
-
-    await ui.press({ key: `done-${workdayId}` })
+    await ui.press({ key: workdayKey })
     expect(files[TODO]).toMatch(/- \[x\] \[Performance review.*✅ \d{4}-\d{2}-\d{2}/)
+
+    const davidKey = String(nexts[0]!.key).slice('next-'.length)
+    await ui.press({ key: `skip-${davidKey}` })
+    expect(files[TODO]).toContain('- [-] [Send David')
+    expect(await ui.find({ type: 'Button', key: `next-${davidKey}` })).toBeUndefined()
+    expect((await ui.find({ type: 'Button', text: /1 done · 1 skipped/ }))?.key).toBe('toggle-done')
+    await ui.press({ key: 'toggle-done' })
+    await ui.press({ key: `unskip-${davidKey}` })
+    expect(files[TODO]).toContain('- [ ] [Send David')
+    expect(workdayId.length).toBeGreaterThan(0)
     await ui.unmount()
   })
 }

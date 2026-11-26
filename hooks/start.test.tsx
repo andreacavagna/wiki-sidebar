@@ -46,7 +46,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
 
     const ui = await $.ui.mount({ ...PANE, surface })
     await ui.press({ key: 'toggle-done' })
-    const starts = (await ui.findAll({ type: 'Button' })).filter((b: any) => String(b.key).startsWith('start-'))
+    const starts = (await ui.findAll({ type: 'Button' })).filter((b: any) => String(b.key).startsWith('next-'))
     expect(starts.length).toBe(1)
 
     await ui.press({ key: starts[0]?.key ?? '' })

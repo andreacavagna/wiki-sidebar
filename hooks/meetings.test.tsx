@@ -74,7 +74,12 @@ const PANE = {
   },
 } as const
 
-function engine(on: any, files: Record<string, string>, prompts: any[], calls: any[]) {
+function engine(on: any, files: Record<string, string>, prompts: any[], calls: any[], store: Record<string, unknown> = {}) {
+  on('store.get', (_: any, e: any) => ({ value: store[e.key] }))
+  on('store.set', (_: any, e: any) => {
+    store[e.key] = JSON.parse(JSON.stringify(e.value))
+    return { value: undefined }
+  })
   on('command.register', () => ({ value: { command: 'wiki' } }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
   on('ui.toast', () => ({ value: undefined }))
@@ -135,12 +140,13 @@ for (const surface of ['terminal', 'desktop'] as const) {
     const files: Record<string, string> = { [TODO]: SEED }
     const prompts: any[] = []
     const calls: any[] = []
-    engine(on, files, prompts, calls)
+    const store: Record<string, unknown> = {}
+    engine(on, files, prompts, calls, store)
     await $.session.start({ cwd: '/', surface, isInteractive: true })
 
     const ui = await $.ui.mount({ ...PANE, surface })
     await ui.press({ key: 'toggle-meetings' })
-    await ui.press({ key: 'prep-training' })
+    await ui.press({ key: 'mnext-training' })
     expect(prompts.length).toBe(1)
     const text: string = prompts[0].text
     expect(text).toContain('Meeting: Tags back office training')
@@ -153,8 +159,21 @@ for (const surface of ['terminal', 'desktop'] as const) {
     const path = text.match(/meeting-prep\/[\w-]+\.md/)?.[0] ?? ''
     files[`${V}/${path}`] = '# prep'
     await $.turn.complete({ reason: 'answer', answer: 'done', durationMs: 1, isAborted: false, turnId: 't1' })
-    expect((await ui.find({ type: 'Button', text: /Open prep/ }))?.key).toBe('prep-open-training')
+    expect((await ui.find({ type: 'Button', key: 'prep-open-training' }))?.text).toContain('Prep')
     expect(calls.length).toBe(1) // the calendar is not re-read within 15 minutes
+
+    // prep done, the same button now closes the meeting for XP; ✕ skips another; both can be undone
+    expect((await ui.find({ type: 'Button', key: 'mnext-training' }))?.text).toContain('Done')
+    await ui.press({ key: 'mnext-training' })
+    expect(await ui.find({ type: 'Text', text: /Tags back office training/ })).toBeUndefined()
+    expect((await ui.find({ type: 'Button', text: /MEETINGS TODAY · 1/ }))?.text).toContain('1')
+    await ui.press({ key: 'mskip-oneone' })
+    expect((await ui.find({ type: 'Button', text: /1 done · 1 skipped/ }))?.key).toBe('toggle-handled-meetings')
+    const stored: any = store.meetingLog
+    expect(Object.values(stored).map((x: any) => x.status).sort()).toEqual(['done', 'skipped'])
+    await ui.press({ key: 'toggle-handled-meetings' })
+    await ui.press({ key: 'unmark-oneone' })
+    expect((await ui.find({ type: 'Text', text: /1:1 Andrea/ }))?.text).toContain('Ale')
     await ui.unmount()
   })
 }

@@ -30,6 +30,7 @@ const PANE = {
 function engine(on: any, files: Record<string, string>, opened: string[]) {
   on('command.register', () => ({ value: { command: 'wiki' } }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('prompt.submit', (_: any, e: any) => ({ text: e.text }))
   on('ui.toast', () => ({ value: undefined }))
   on('theme.set', () => ({ value: { isDrawn: true } }))
   on('session.start', (_: any, e: any) => ({ cwd: e.cwd }))
@@ -61,13 +62,16 @@ for (const surface of ['terminal', 'desktop'] as const) {
     expect(await ui.find({ type: 'Text', text: /Streamlit/ })).toBeUndefined()
     expect(await ui.find({ type: 'Text', text: /Plain line/ })).toBeUndefined()
 
-    const buttons = await ui.findAll({ type: 'Button' })
-    const openKey = buttons.find((b: any) => String(b.key).startsWith('open-'))?.key ?? ''
-    const doneKey = buttons.find((b: any) => String(b.key).startsWith('done-'))?.key ?? ''
-    await ui.press({ key: openKey })
-    expect(opened[0]).toBe('https://tripadvisor.enterprise.slack.com/team/UMZ4WFWBT')
+    // the title links to where the to-do gets done
+    const links = await ui.findAll({ type: 'Link' })
+    expect(links.map((l: any) => l.props?.href ?? l.href)).toContain('https://tripadvisor.enterprise.slack.com/team/UMZ4WFWBT')
 
-    await ui.press({ key: doneKey })
+    // one button moves it along: Start, then Done
+    const firstNext = () => ui.findAll({ type: 'Button' }).then((bs: any[]) => bs.find(b => String(b.key).startsWith('next-'))?.key ?? '')
+    const key = await firstNext()
+    await ui.press({ key })
+    expect(files[TODO]).toContain('- [/] [Send David the Michelin doc]')
+    await ui.press({ key })
     expect(files[TODO]).toMatch(/- \[x\] \[Send David the Michelin doc\].*✅ \d{4}-\d{2}-\d{2}/)
     expect((await ui.find({ type: 'Button', text: /1 done/ }))?.text).toContain('1 done')
     await ui.unmount()
