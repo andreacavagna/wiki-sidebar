@@ -328,7 +328,7 @@ function textReport(snap: Snapshot): string {
   if (snap.error) return `To-do: ${snap.error}`
   const g = gameOf(snap)
   const lines: string[] = []
-  lines.push(`TO-DO · Lv ${g.level} ${g.title} · ${g.xp} XP · ${g.streak}-day streak · ${g.doneToday} done today · Clawd: ${clawdFor(g.level).name}`)
+  lines.push(`TO-DO · Lv ${g.level} ${g.title} · ${g.xp} XP · 🔥 ${g.streak}-day streak · ${g.doneToday} done today · Clawd: ${clawdFor(g.level).name}`)
   lines.push('')
   if (g.open.length === 0) lines.push('☐ nothing pending')
   g.open.forEach(t => lines.push(`${t.isStarted ? '◐' : '☐'} [${KIND[t.kind].label}]${t.isStarted ? ' IN PROGRESS' : ''} ${t.text}${t.context ? ` (${t.context})` : ''}\n   ${t.url}`))
@@ -357,25 +357,7 @@ const esc = (s: string) =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 
 const svgRoot = (h: number, body: string) =>
-  `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${h}" width="100%" preserveAspectRatio="xMidYMid meet">${HERO_LIGHT}${body}</svg>`
-
-// The fill attributes are the dark look; in a light app these rules (CSS beats presentation attributes)
-// switch the hero to the warm paper of the light theme, with darker inks so small labels stay readable.
-const HERO_LIGHT = `<style>@media (prefers-color-scheme: light) {
-.tile{fill:#fbf7f1;stroke:#e3d9cc}
-.track{fill:#e8dfd3}
-.rule{stroke:#e3d9cc}
-.ink{fill:#2b2420}
-.muted{fill:#6e6157}
-.accent{fill:#b5543a}
-.chip{fill:#f6e1d6;stroke:#d97757}
-.gold{fill:#8a5f10}
-.k-slack{fill:#7e4fa6}
-.k-notion{fill:#3f5f8f}
-.k-artifact{fill:#b5543a}
-.k-workday{fill:#8a5f10}
-.locked rect{fill:#e3d9cc}
-}</style>`
+  `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${h}" width="100%" preserveAspectRatio="xMidYMid meet">${body}</svg>`
 
 /** The level card: level, XP, streak and today, the current Clawd animated beside it, and the Clawd ladder along the bottom. */
 function heroSvg(g: ReturnType<typeof gameOf>) {
@@ -385,7 +367,7 @@ function heroSvg(g: ReturnType<typeof gameOf>) {
   const H = 250
   const barW = W - 40
   const counts = (['slack', 'notion', 'artifact', 'workday'] as const)
-    .map(k => `<tspan class="k-${k}" fill="${KIND[k].color}">${KIND[k].label}</tspan> <tspan class="ink" fill="${C.ink}" font-weight="700">${g.openBy(k)}</tspan>`)
+    .map(k => `<tspan fill="${KIND[k].color}">${KIND[k].label}</tspan> <tspan fill="${C.ink}" font-weight="700">${g.openBy(k)}</tspan>`)
     .join('  ')
   const current = clawdFor(g.level)
   const big = 1.3
@@ -403,26 +385,31 @@ function heroSvg(g: ReturnType<typeof gameOf>) {
     const x = cx - (14 * P * mini) / 2
     const art = on ? miniArt(c) : clawdShape(C.tileLine, { eyes: '' })
     return `<g><title>${esc(on ? `${c.name}, level ${lv}` : `Unlocks at level ${lv}`)}</title>
-    ${isCurrent ? `<rect class="chip" x="${(cx - cell / 2 + 2).toFixed(1)}" y="196" width="${(cell - 4).toFixed(1)}" height="46" rx="8" fill="${C.coralSoft}" stroke="${C.coral}"/>` : ''}
-    <g${on ? '' : ' class="locked"'} transform="translate(${x.toFixed(1)} 210) scale(${mini})" opacity="${on ? 1 : 0.6}">${art}</g>
-    <text class="${isCurrent ? 'accent' : 'muted'}" x="${cx.toFixed(1)}" y="236" text-anchor="middle" font-family="${MONO}" font-size="7.5" fill="${isCurrent ? C.coral : C.muted}">${on ? `LV ${lv}` : '?'}</text></g>`
+    ${isCurrent ? `<rect x="${(cx - cell / 2 + 2).toFixed(1)}" y="196" width="${(cell - 4).toFixed(1)}" height="46" rx="8" fill="${C.coralSoft}" stroke="${C.coral}"/>` : ''}
+    <g transform="translate(${x.toFixed(1)} 210) scale(${mini})" opacity="${on ? 1 : 0.6}">${art}</g>
+    <text x="${cx.toFixed(1)}" y="236" text-anchor="middle" font-family="${MONO}" font-size="7.5" fill="${isCurrent ? C.coral : C.muted}">${on ? `LV ${lv}` : '?'}</text></g>`
   }).join('')
   return svgRoot(
     H,
-    `<rect class="tile" x="0.5" y="0.5" width="${W - 1}" height="${H - 1}" rx="14" fill="${C.tile}" stroke="${C.tileLine}"/>
-  <text class="accent" x="20" y="30" font-family="${MONO}" font-size="10" letter-spacing="2" fill="${C.coral}">◆ TO-DO · ${g.open.length} OPEN · ${g.started} STARTED · ${g.doneToday} TODAY</text>
-  <text class="ink" x="20" y="66" font-family="${SANS}" font-size="28" font-weight="700" fill="${C.ink}">Level ${g.level}</text>
-  <text class="accent" x="20" y="96" font-family="${SANS}" font-size="24" font-weight="700" fill="${C.coral}">${esc(g.title)}.</text>
+    `<defs>
+    <linearGradient id="bar" x1="0" x2="1"><stop offset="0" stop-color="${C.coral}"/><stop offset="1" stop-color="${C.gold}"/></linearGradient>
+    <radialGradient id="glow" cx="0.85" cy="0.2" r="0.6"><stop offset="0" stop-color="${C.coral}" stop-opacity="0.22"/><stop offset="1" stop-color="${C.coral}" stop-opacity="0"/></radialGradient>
+  </defs>
+  <rect x="0.5" y="0.5" width="${W - 1}" height="${H - 1}" rx="14" fill="${C.tile}" stroke="${C.tileLine}"/>
+  <rect x="0.5" y="0.5" width="${W - 1}" height="${H - 1}" rx="14" fill="url(#glow)"/>
+  <text x="20" y="30" font-family="${MONO}" font-size="10" letter-spacing="2" fill="${C.coral}">◆ TO-DO · ${g.open.length} OPEN · ${g.started} STARTED · ${g.doneToday} TODAY</text>
+  <text x="20" y="66" font-family="${SANS}" font-size="28" font-weight="700" fill="${C.ink}">Level ${g.level}</text>
+  <text x="20" y="96" font-family="${SANS}" font-size="24" font-weight="700" fill="${C.coral}">${esc(g.title)}.</text>
   <g transform="translate(${bigX.toFixed(1)} 50) scale(${big})"><g>${current.motion}${clawdArt(current)}</g></g>
-  <text class="muted" x="${(bigX + 7 * P * big).toFixed(1)}" y="104" text-anchor="middle" font-family="${MONO}" font-size="8" letter-spacing="1" fill="${C.muted}">${esc(current.name.toUpperCase())}</text>
+  <text x="${(bigX + 7 * P * big).toFixed(1)}" y="104" text-anchor="middle" font-family="${MONO}" font-size="8" letter-spacing="1" fill="${C.muted}">${esc(current.name.toUpperCase())}</text>
   <text x="20" y="122" font-family="${MONO}" font-size="9" letter-spacing="1">${counts}</text>
-  <rect class="track" x="20" y="134" width="${barW}" height="7" rx="3.5" fill="${C.tileLine}"/>
-  <rect x="20" y="134" width="${Math.max(7, barW * pct).toFixed(1)}" height="7" rx="3.5" fill="${C.coral}"/>
-  <text class="muted" x="20" y="162" font-family="${MONO}" font-size="10" fill="${C.muted}"><tspan class="ink" fill="${C.ink}" font-weight="700">${g.xp}</tspan> XP · ${xpSpan - xpIn} to Lv ${g.level + 1}</text>
-  <text class="${g.streak > 0 ? 'gold' : 'muted'}" x="${W - 20}" y="162" text-anchor="end" font-family="${MONO}" font-size="10" fill="${g.streak > 0 ? C.gold : C.muted}">${g.streak}-DAY STREAK</text>
-  <line class="rule" x1="20" x2="${W - 20}" y1="176" y2="176" stroke="${C.tileLine}"/>
-  <text class="muted" x="20" y="190" font-family="${MONO}" font-size="8.5" letter-spacing="1" fill="${C.muted}">CLAWDS <tspan class="ink" fill="${C.ink}" font-weight="700">${unlocked} OF ${CLAWDS.length}</tspan></text>
-  <text class="accent" x="${W - 20}" y="190" text-anchor="end" font-family="${MONO}" font-size="8.5" letter-spacing="1" fill="${C.coral}">${next ? `NEXT: ${esc(next.name.toUpperCase())} AT LV ${g.level + 1}` : 'ALL UNLOCKED'}</text>
+  <rect x="20" y="134" width="${barW}" height="7" rx="3.5" fill="${C.tileLine}"/>
+  <rect x="20" y="134" width="${Math.max(7, barW * pct).toFixed(1)}" height="7" rx="3.5" fill="url(#bar)"/>
+  <text x="20" y="162" font-family="${MONO}" font-size="10" fill="${C.muted}"><tspan fill="${C.ink}" font-weight="700">${g.xp}</tspan> XP · ${xpSpan - xpIn} to Lv ${g.level + 1}</text>
+  <text x="${W - 20}" y="162" text-anchor="end" font-family="${MONO}" font-size="10" fill="${g.streak > 0 ? C.gold : C.muted}">🔥 ${g.streak}-DAY STREAK</text>
+  <line x1="20" x2="${W - 20}" y1="176" y2="176" stroke="${C.tileLine}"/>
+  <text x="20" y="190" font-family="${MONO}" font-size="8.5" letter-spacing="1" fill="${C.muted}">CLAWDS <tspan fill="${C.ink}" font-weight="700">${unlocked} OF ${CLAWDS.length}</tspan></text>
+  <text x="${W - 20}" y="190" text-anchor="end" font-family="${MONO}" font-size="8.5" letter-spacing="1" fill="${C.coral}">${next ? `NEXT: ${esc(next.name.toUpperCase())} AT LV ${g.level + 1}` : 'ALL UNLOCKED'}</text>
   ${ladder}`,
   )
 }
@@ -592,10 +579,10 @@ function drawTodos($: any, E: any, snap: Snapshot | null, isShowingDone: boolean
       ) : (
         <Box flexDirection="column" borderStyle="round" borderColor={C.coral} paddingX={1}>
           <Text bold>
-            Level {g.level} <Text color={C.coral}>{g.title}.</Text> <Text color={C.gold}>{g.streak}-day streak</Text>
+            Level {g.level} <Text color={C.coral}>{g.title}.</Text> <Text color={C.gold}>🔥 {g.streak}</Text>
           </Text>
           <Text dimColor>
-            {clawdFor(g.level).name} · Clawds {Math.min(g.level, CLAWDS.length)} of {CLAWDS.length}
+            👾 {clawdFor(g.level).name} · Clawds {Math.min(g.level, CLAWDS.length)} of {CLAWDS.length}
           </Text>
           <Progress label={`XP to level ${g.level + 1}`} value={g.xp - g.floor} max={g.ceil - g.floor} valueText={`${g.xp} XP`} color={C.coral} />
         </Box>
@@ -603,7 +590,7 @@ function drawTodos($: any, E: any, snap: Snapshot | null, isShowingDone: boolean
       {total > 0 && (
         <Progress label="Today" value={g.doneToday} max={total} valueText={`${g.doneToday} of ${total} done today`} color={C.green} />
       )}
-      {g.open.length === 0 && <Text color={C.green}>Nothing pending</Text>}
+      {g.open.length === 0 && <Text color={C.green}>Nothing pending. 🏆</Text>}
       {g.open.map(t => (
         <Box
           key={`q-${t.id}`}
@@ -806,7 +793,7 @@ async function drawPanel($: any, e: any) {
       <Box flexDirection="column">
         {g ? (
           <Text bold>
-            Lv {g.level} <Text color={C.coral}>{g.title}</Text> · {g.streak}-day streak
+            Lv {g.level} <Text color={C.coral}>{g.title}</Text> · 🔥 {g.streak}
           </Text>
         ) : null}
         <Text dimColor>
