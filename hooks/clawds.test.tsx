@@ -33,17 +33,31 @@ function engine(on: any, files: Record<string, string>, toasts: string[]) {
 test('the level card carries the Clawd ladder and the badges are gone (desktop)', async ($, on) => {
   const files = { [TODO]: ['# To-do', ...done(20)].join('\n') }
   engine(on, files, [])
+  const stored: Record<string, unknown> = {}
+  on('store.get', (_: any, e: any) => ({ value: stored[e.key] }))
+  on('store.set', (_: any, e: any) => {
+    stored[e.key] = e.value
+    return { value: undefined }
+  })
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   const svgs = await ui.findAll({ type: 'Svg' })
   expect(svgs.length).toBe(1) // the level card only: no badges
   const card: any = svgs[0]
-  expect(card?.props?.alt).toContain('Level 3')
-  expect(card?.props?.alt).toContain('Hopper unlocked')
-  expect(card?.props?.alt).toContain('Courier locked until level 4')
-  expect(card?.props?.source).toContain('CLAWDS')
+  expect(card?.props?.alt).toContain('Level 6')
+  expect(card?.props?.alt).toContain('Shipwright unlocked')
+  expect(card?.props?.alt).toContain('Swordsman locked until level 7')
+  expect(card?.props?.source).toContain('CREW')
   expect(card?.props?.isInteractive).toBeUndefined()
   expect(await ui.find({ type: 'Text', text: /BADGES/ })).toBeUndefined()
+  // pick an earlier crew mate for the top of the card, then press it again to go back to the latest
+  expect((await ui.find({ type: 'Button', key: 'crew-6' }))?.text).toContain('● Shipwright')
+  await ui.press({ key: 'crew-3' })
+  expect((await ui.find({ type: 'Button', key: 'crew-3' }))?.text).toContain('● Lookout')
+  expect(((await ui.findAll({ type: 'Svg' }))[0] as any)?.props?.alt).toContain('On deck: Lookout')
+  expect(stored.crewPick).toBe(3)
+  await ui.press({ key: 'crew-3' })
+  expect(((await ui.findAll({ type: 'Svg' }))[0] as any)?.props?.alt).toContain('On deck: Shipwright')
   await ui.unmount()
 })
 
@@ -57,6 +71,6 @@ test('crossing a level toasts the new Clawd (terminal)', async ($, on) => {
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   const key = (await ui.findAll({ type: 'Button' })).find((b: any) => String(b.key).startsWith('next-'))?.key ?? ''
   await ui.press({ key })
-  expect(toasts.some(t => t.includes('Level 2! New Clawd unlocked: Waver'))).toBe(true)
+  expect(toasts.some(t => t.includes('Level 3! New crew mate: Lookout'))).toBe(true)
   await ui.unmount()
 })

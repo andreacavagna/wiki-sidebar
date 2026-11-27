@@ -85,6 +85,7 @@ declare module 'claude-code' {
       showPastMeetings: boolean
       meetingLog: Shaped<MeetingLog>
       showMeetingsHandled: boolean
+      crewPick: number | null
     }
   }
 }

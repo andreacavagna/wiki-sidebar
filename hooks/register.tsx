@@ -58,6 +58,9 @@ const showMeetingsHandled = atom({ plugin: 'wiki-sidebar', key: 'showMeetingsHan
 // Meetings marked done or skipped: the session's copy of what $.store keeps across sessions.
 const meetingLog = atom({ plugin: 'wiki-sidebar', key: 'meetingLog' } as const, {} as MeetingLog, { shape: 'meeting-log-1' })
 const LOG_KEY = 'meetingLog'
+// The crew mate shown big on the game card: a level picked from the crew row, or null for the latest unlocked.
+const crewPick = atom({ plugin: 'wiki-sidebar', key: 'crewPick' } as const, null as number | null)
+const PICK_KEY = 'crewPick'
 // Re-read the calendar at the end of a turn when the last read is older than this.
 const MEETINGS_TTL_MS = 15 * 60 * 1000
 
@@ -65,10 +68,19 @@ const MEETINGS_TTL_MS = 15 * 60 * 1000
 
 const XP_PER_TODO = 10
 const XP_PER_MEETING = 10
-const TITLES = ['Rookie', 'Closer', 'Finisher', 'Shipper', 'Operator', 'Machine', 'Legend']
-// Level n starts at 50 * n * (n - 1) / 2 XP: 0, 50, 150, 300, 500, ...
-const xpForLevel = (n: number) => (50 * n * (n - 1)) / 2
-const levelOf = (xp: number) => Math.max(1, Math.floor((1 + Math.sqrt(1 + (8 * xp) / 50)) / 2))
+// XP from level n to n + 1: 20, 30, 40, then 50 for every level after (2 to 5 to-dos or meetings a level)
+const stepXp = (n: number) => Math.min(50, 10 * (n + 1))
+// Level n starts at: 0, 20, 50, 90, 140, 190, ...
+const xpForLevel = (n: number) => {
+  let total = 0
+  for (let k = 1; k < n; k++) total += stepXp(k)
+  return total
+}
+const levelOf = (xp: number) => {
+  let level = 1
+  while (xpForLevel(level + 1) <= xp) level++
+  return level
+}
 
 const KIND: Record<TodoKind, { label: string; open: string; color: string }> = {
   slack: { label: 'SLACK', open: 'Open in Slack', color: '#C08BE0' },
@@ -210,9 +222,9 @@ function celebrate($: any, xpBefore: number, xpAfter: number, what: string) {
   const levelBefore = levelOf(xpBefore)
   const levelAfter = levelOf(xpAfter)
   if (levelAfter > levelBefore && levelAfter <= CLAWDS.length) {
-    void $.ui.toast(`Level ${levelAfter}! New Clawd unlocked: ${clawdFor(levelAfter).name}`)
+    void $.ui.toast(`Level ${levelAfter}! New crew mate: ${clawdFor(levelAfter).name}`)
   } else if (levelAfter > levelBefore) {
-    void $.ui.toast(`Level ${levelAfter}! ${clawdFor(levelAfter).name} Clawd still reigns`)
+    void $.ui.toast(`Level ${levelAfter}! The ${clawdFor(levelAfter).name} still rules the crew`)
   } else {
     void $.ui.toast(`${what}: +${xpAfter - xpBefore} XP`)
   }
@@ -332,6 +344,25 @@ const meetingKey = (day: string, m: MeetingItem) => `${day}|${m.id}`
 const meetingXp = (log: MeetingLog) => Object.values(log).filter(x => x.status === 'done').length * XP_PER_MEETING
 
 /** Read the meeting log kept across sessions into the session's state. */
+async function loadCrewPick($: any) {
+  try {
+    const stored = await $.store.get(PICK_KEY)
+    if (typeof stored === 'number') await update($, crewPick, () => stored)
+  } catch {
+    // no store on this host: the latest crew mate shows
+  }
+}
+
+/** Show this level's crew mate big on the card; picking the one already shown goes back to the latest. */
+async function pickCrew($: any, level: number) {
+  const next = await update($, crewPick, cur => (cur === level ? null : level))
+  try {
+    await $.store.set(PICK_KEY, next)
+  } catch {
+    // kept for this session only
+  }
+}
+
 async function loadMeetingLog($: any) {
   try {
     const stored = (await $.store.get(LOG_KEY)) as MeetingLog | undefined
@@ -385,7 +416,7 @@ function gameOf(snap: Snapshot | null, log: MeetingLog = {}) {
   const level = levelOf(xp)
   const floor = xpForLevel(level)
   const ceil = xpForLevel(level + 1)
-  const title = TITLES[Math.min(level - 1, TITLES.length - 1)] ?? 'Legend'
+  const title = clawdFor(level).name
   const doneToday = closed.filter(t => t.doneDate === today()).length + meetingsDone.filter(x => x.day === dayIn()).length
   const streak = streakFrom(new Set([...closed.map(t => t.doneDate), ...meetingsDone.map(x => x.day)].filter(Boolean)))
   const openBy = (k: TodoKind) => open.filter(t => t.kind === k).length
@@ -441,7 +472,7 @@ const svgRoot = (h: number, body: string) =>
   `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${h}" width="100%" preserveAspectRatio="xMidYMid meet">${body}</svg>`
 
 /** The level card: level, XP, streak and today, the current Clawd animated beside it, and the Clawd ladder along the bottom. */
-function heroSvg(g: ReturnType<typeof gameOf>, meetingsLeft: number) {
+function heroSvg(g: ReturnType<typeof gameOf>, meetingsLeft: number, current: Clawd) {
   const xpIn = g.xp - g.floor
   const xpSpan = g.ceil - g.floor
   const pct = Math.max(0, Math.min(1, xpSpan > 0 ? xpIn / xpSpan : 0))
@@ -452,14 +483,13 @@ function heroSvg(g: ReturnType<typeof gameOf>, meetingsLeft: number) {
     `<tspan fill="${C.coral}">TO-DOS</tspan> <tspan fill="${C.ink}" font-weight="700">${g.todoXp} XP</tspan>`,
     `<tspan fill="${ROLE['one-on-one'].color}">MEETINGS</tspan> <tspan fill="${C.ink}" font-weight="700">${g.meetXp} XP</tspan>`,
   ].join('   ')
-  const current = clawdFor(g.level)
   const big = 1.3
   const bigX = W - 20 - 14 * P * big
   const unlocked = Math.min(g.level, CLAWDS.length)
   const next = CLAWDS[g.level]
   // the ladder: one small Clawd per level along the bottom
   const cell = barW / CLAWDS.length
-  const mini = 0.5
+  const mini = 0.42
   const ladder = CLAWDS.map((c, i) => {
     const lv = i + 1
     const on = g.level >= lv
@@ -483,23 +513,36 @@ function heroSvg(g: ReturnType<typeof gameOf>, meetingsLeft: number) {
   <text x="20" y="30" font-family="${MONO}" font-size="10" letter-spacing="2" fill="${C.coral}">◆ ${g.open.length} TO-DO · ${meetingsLeft} MEETINGS · ${g.doneToday} DONE TODAY</text>
   <text x="20" y="66" font-family="${SANS}" font-size="28" font-weight="700" fill="${C.ink}">Level ${g.level}</text>
   <text x="20" y="96" font-family="${SANS}" font-size="24" font-weight="700" fill="${C.coral}">${esc(g.title)}.</text>
-  <g transform="translate(${bigX.toFixed(1)} 50) scale(${big})"><g>${current.motion}${clawdArt(current)}</g></g>
-  <text x="${(bigX + 7 * P * big).toFixed(1)}" y="104" text-anchor="middle" font-family="${MONO}" font-size="8" letter-spacing="1" fill="${C.muted}">${esc(current.name.toUpperCase())}</text>
+  <g transform="translate(${bigX.toFixed(1)} 58) scale(${big})"><g>${current.motion}${clawdArt(current)}</g></g>
+  <text x="${(bigX + 7 * P * big).toFixed(1)}" y="112" text-anchor="middle" font-family="${MONO}" font-size="8" letter-spacing="1" fill="${C.muted}">${current.name === g.title ? '' : `ON DECK: ${esc(current.name.toUpperCase())}`}</text>
   <text x="20" y="122" font-family="${MONO}" font-size="9" letter-spacing="1">${counts}</text>
   <rect x="20" y="134" width="${barW}" height="7" rx="3.5" fill="${C.tileLine}"/>
   <rect x="20" y="134" width="${Math.max(7, barW * pct).toFixed(1)}" height="7" rx="3.5" fill="url(#bar)"/>
   <text x="20" y="162" font-family="${MONO}" font-size="10" fill="${C.muted}"><tspan fill="${C.ink}" font-weight="700">${g.xp}</tspan> XP · ${xpSpan - xpIn} to Lv ${g.level + 1}</text>
   <text x="${W - 20}" y="162" text-anchor="end" font-family="${MONO}" font-size="10" fill="${g.streak > 0 ? C.gold : C.muted}">🔥 ${g.streak}-DAY STREAK</text>
   <line x1="20" x2="${W - 20}" y1="176" y2="176" stroke="${C.tileLine}"/>
-  <text x="20" y="190" font-family="${MONO}" font-size="8.5" letter-spacing="1" fill="${C.muted}">CLAWDS <tspan fill="${C.ink}" font-weight="700">${unlocked} OF ${CLAWDS.length}</tspan></text>
+  <text x="20" y="190" font-family="${MONO}" font-size="8.5" letter-spacing="1" fill="${C.muted}">CREW <tspan fill="${C.ink}" font-weight="700">${unlocked} OF ${CLAWDS.length}</tspan></text>
   <text x="${W - 20}" y="190" text-anchor="end" font-family="${MONO}" font-size="8.5" letter-spacing="1" fill="${C.coral}">${next ? `NEXT: ${esc(next.name.toUpperCase())} AT LV ${g.level + 1}` : 'ALL UNLOCKED'}</text>
   ${ladder}`,
   )
 }
 
-// ---------- Clawds: one animated Clawd unlocked per level ----------
+// ---------- Clawds: an original pirate crew, one crew mate unlocked per level ----------
 
-type Clawd = { name: string; body: string; extra: string; motion: string }
+/**
+ * One crew mate. `extra` is the outfit drawn over the body; `rightArm` / `leftArm` ride with that arm;
+ * `armMotion` animates the right arm, `walk` the legs, `motion` the whole Clawd (big card only).
+ */
+type Clawd = {
+  name: string
+  body: string
+  extra: string
+  motion: string
+  rightArm?: string
+  leftArm?: string
+  armMotion?: string
+  walk?: boolean
+}
 
 const P = 4 // one Clawd pixel in SVG units
 const px = (x: number, y: number, w: number, h: number, fill: string, more = '') =>
@@ -517,6 +560,7 @@ const blinkEyes = (color = EYE) =>
         `<rect x="${x * P}" y="${2 * P}" width="${P}" height="${2 * P}" fill="${color}">${loop('height', `${2 * P};${2 * P};1;${2 * P}`, '3.2s', 'keyTimes="0;0.9;0.95;1"')}${loop('y', `${2 * P};${2 * P};${3.5 * P};${2 * P}`, '3.2s', 'keyTimes="0;0.9;0.95;1"')}</rect>`,
     )
     .join('')
+const stillEyes = [4, 9].map(x => px(x, 2, 1, 2, EYE)).join('')
 
 /** Clawd's own shape: body, two arms, four legs. Arms and legs come as separate groups so they can move. */
 function clawdShape(body: string, opts: { leftArm?: string; rightArm?: string; legsA?: string; legsB?: string; eyes?: string } = {}) {
@@ -532,88 +576,118 @@ function clawdShape(body: string, opts: { leftArm?: string; rightArm?: string; l
 
 const CORAL = '#D97757'
 const GOLDC = '#E8B04B'
+const WOOD = '#8a5a2b'
+const WOOD_DARK = '#5b3a1c'
+const RED = '#c9483b'
+const INK = '#1d1b19'
+const STEEL = '#cfd8dc'
+const BRASS = '#c8a24a'
+
+/** A three-cornered captain's hat with gold trim and an anchor badge (original design). */
+const tricorn = (feather = '') =>
+  `${px(1, -1.2, 12, 1.2, INK)}${px(3, -3.2, 8, 2, INK)}${px(0.5, -2, 2, 1, INK)}${px(11.5, -2, 2, 1, INK)}${px(1, -0.5, 12, 0.4, GOLDC)}` +
+  `${px(6.6, -2.9, 0.8, 1.7, '#fff')}${px(6, -1.6, 2, 0.4, '#fff')}${feather}`
+
+const sparkles = [
+  [-2, -3, '0s'],
+  [15, 0, '0.6s'],
+  [-1.5, 6, '1.1s'],
+  [15.5, 6.5, '0.3s'],
+]
+  .map(([x, y, d]) => `<rect x="${Number(x) * P}" y="${Number(y) * P}" width="${P}" height="${P}" fill="#fff6d8" opacity="0">${loop('opacity', '0;1;0', '1.4s', `begin="${d}"`)}</rect>`)
+  .join('')
 
 const CLAWDS: Clawd[] = [
-  // Lv 1: the plain one, breathing
-  { name: 'Hatchling', body: CORAL, extra: '', motion: move('0 0;0 -2;0 0', '1.6s') },
-  // Lv 2: waves hello
-  { name: 'Waver', body: CORAL, extra: 'wave', motion: move('0 0;0 -1;0 0', '1.6s') },
-  // Lv 3: headband, hops
+  // Lv 1: peeks out of a barrel in the hold
   {
-    name: 'Hopper',
+    name: 'Stowaway',
     body: CORAL,
-    extra: `${px(2, 0, 10, 1, '#c9483b')}${px(12, 0, 2, 1, '#c9483b')}${px(13, 1, 1, 1, '#c9483b')}`,
-    motion: move('0 0;0 -10;0 0;0 0', '1s', 'keyTimes="0;0.3;0.6;1"'),
+    extra: `${px(1, 4, 12, 4, WOOD)}${px(1, 4.5, 12, 0.6, WOOD_DARK)}${px(1, 6.9, 12, 0.6, WOOD_DARK)}${px(4, 5.3, 0.4, 1.4, WOOD_DARK)}${px(9.6, 5.3, 0.4, 1.4, WOOD_DARK)}`,
+    motion: move('0 2;0 -2;0 -2;0 2', '2.4s', 'keyTimes="0;0.3;0.7;1"'),
   },
-  // Lv 4: carries a parcel and walks
+  // Lv 2: dotted bandana, waves from the deck
   {
-    name: 'Courier',
+    name: 'Deckhand',
     body: CORAL,
-    extra: `${px(4, -4, 6, 4, '#a9773f')}${px(6.5, -4, 1, 4, '#7d5528')}${px(4, -2.5, 6, 1, '#7d5528')}`,
-    motion: move('-8 0;8 0;-8 0', '2.4s'),
+    extra: `${px(2, 0, 10, 1.2, RED)}${px(3.5, 0.3, 0.5, 0.5, '#fff')}${px(6.5, 0.3, 0.5, 0.5, '#fff')}${px(9.5, 0.3, 0.5, 0.5, '#fff')}${px(1, 0.4, 1.2, 0.8, RED)}${px(0.4, 1, 0.8, 1, RED)}`,
+    armMotion: '0 0;0 -8;0 -4;0 -8;0 0',
+    motion: move('0 0;0 -1;0 0', '1.6s'),
   },
-  // Lv 5: shades and headset
+  // Lv 3: spyglass to the eye, scanning the horizon
   {
-    name: 'Operator',
+    name: 'Lookout',
     body: CORAL,
-    extra: `${px(3, 2, 8, 1.4, '#111')}${px(1.5, -1.5, 11, 1, '#3a3632')}${px(1.5, -1.5, 1, 3, '#3a3632')}${px(11.5, -1.5, 1, 3, '#3a3632')}${px(11.5, 3.2, 2.5, 0.8, '#3a3632')}`,
-    motion: move('0 0;0 -1;0 0', '0.5s'),
+    extra: `${px(2, -0.6, 10, 0.8, '#3d6e8f')}${px(9, 2.2, 5, 1.4, BRASS)}${px(13.6, 1.9, 1.2, 2, '#8a6d2a')}${px(10.6, 2.2, 0.4, 1.4, '#8a6d2a')}`,
+    motion: move('-3 0;3 0;-3 0', '3s'),
   },
-  // Lv 6: antenna with a beacon, glowing eyes
+  // Lv 4: unrolled chart with the route marked, walks the deck
   {
-    name: 'Mecha',
-    body: '#B5603F',
-    extra: `${px(6.5, -3, 1, 3, '#8F8A82')}<rect x="${6 * P}" y="${-4.5 * P}" width="${2 * P}" height="${2 * P}" fill="#E8B04B">${loop('opacity', '1;0.2;1', '1s')}</rect>${px(2, 4.5, 10, 0.6, '#8F8A82')}`,
-    motion: move('0 0;1 0;-1 0;0 0', '0.4s'),
+    name: 'Navigator',
+    body: CORAL,
+    extra: `${px(2.5, 3.6, 9, 3, '#efe1b5')}${px(2.3, 3.4, 0.6, 3.4, '#c9b27a')}${px(11.1, 3.4, 0.6, 3.4, '#c9b27a')}${px(3.6, 4.3, 3, 0.35, '#b08a4a')}${px(5.6, 5.3, 3, 0.35, '#b08a4a')}${px(9.2, 4.6, 0.8, 0.8, RED)}`,
+    walk: true,
+    motion: move('-6 0;6 0;-6 0', '3s'),
   },
-  // Lv 7+: gold, crowned, sparkling
+  // Lv 5: chef's hat, stirring with a ladle
   {
-    name: 'Legend',
+    name: 'Cook',
+    body: CORAL,
+    extra: `${px(3, -1.6, 8, 1.8, '#fff')}${px(2.5, -3.6, 3.4, 2.2, '#fff')}${px(5.3, -4.2, 3.4, 2.8, '#fff')}${px(8.1, -3.6, 3.4, 2.2, '#fff')}${px(3, -0.2, 8, 0.4, '#d9d4cc')}`,
+    rightArm: `${px(13, -1.5, 0.6, 4, '#8F8A82')}${px(12.4, -2.2, 1.8, 1, '#8F8A82')}`,
+    armMotion: '0 0;2 1;0 2;-1 1;0 0',
+    motion: move('0 0;0 -1;0 0', '1.2s'),
+  },
+  // Lv 6: tool belt and a mallet that taps the planks
+  {
+    name: 'Shipwright',
+    body: CORAL,
+    extra: `${px(2, 4.4, 10, 0.9, WOOD_DARK)}${px(4, 4.5, 1, 1.4, '#8F8A82')}${px(8.6, 4.5, 1.2, 1.2, BRASS)}${px(2, 0, 10, 0.8, '#3f7f5f')}`,
+    rightArm: `${px(13, -1.4, 0.8, 4, WOOD)}${px(12, -2.6, 3, 1.5, '#5d5a55')}`,
+    armMotion: '0 0;0 -3;0 0;0 0',
+    motion: move('0 0;0 -1;0 0', '0.6s'),
+  },
+  // Lv 7: headband and a raised cutlass, ready for a boarding
+  {
+    name: 'Swordsman',
+    body: '#C96A4B',
+    extra: `${px(2, 0.6, 10, 0.8, INK)}${px(12, 0.6, 1.4, 0.6, INK)}${px(13, 1.1, 0.8, 1.2, INK)}${px(2, 4.3, 10, 0.7, '#6b4c9a')}`,
+    rightArm: `${px(13.1, -2.6, 0.7, 4.6, STEEL)}${px(13.1, -3, 0.5, 0.6, STEEL)}${px(12.4, 1.8, 2.1, 0.5, BRASS)}`,
+    motion: move('0 0;0 -5;0 0;0 0', '0.9s', 'keyTimes="0;0.25;0.5;1"'),
+  },
+  // Lv 8: eyepatch, gold earring and a parrot on the shoulder
+  {
+    name: 'First Mate',
+    body: CORAL,
+    extra: `${px(2, 1.2, 10, 0.4, INK)}${px(3.5, 1.6, 2, 2.6, INK)}${px(12.2, 3.6, 0.7, 0.7, GOLDC)}`,
+    leftArm: `${px(0, -1.6, 2.2, 2, '#5aa05a')}${px(-0.6, -1.1, 0.7, 0.6, GOLDC)}${px(0.4, -1.2, 0.4, 0.4, INK)}${px(1.6, 0.2, 0.8, 1.4, '#3f7f3f')}`,
+    motion: move('0 0;0 -1;0 0', '1.4s'),
+  },
+  // Lv 9: the captain's tricorn and a coat collar
+  {
+    name: 'Captain',
+    body: CORAL,
+    extra: `${tricorn()}${px(2, 4.8, 10, 1.2, '#2f3d63')}${px(6.5, 4.8, 1, 1.2, GOLDC)}`,
+    motion: move('0 0;0 -2;0 0', '2s'),
+  },
+  // Lv 10+: gold, plumed tricorn, sparkling
+  {
+    name: 'Sea Legend',
     body: GOLDC,
-    extra: `${px(3, -2, 8, 2, '#f2c14e')}${px(3, -3.5, 1, 1.5, '#f2c14e')}${px(6.5, -3.5, 1, 1.5, '#f2c14e')}${px(10, -3.5, 1, 1.5, '#f2c14e')}${px(6.5, -1.5, 1, 1, '#c9483b')}${[
-      [-2, -3, '0s'],
-      [15, 0, '0.6s'],
-      [-1.5, 6, '1.1s'],
-      [15.5, 6.5, '0.3s'],
-    ]
-      .map(([x, y, d]) => `<rect x="${Number(x) * P}" y="${Number(y) * P}" width="${P}" height="${P}" fill="#fff6d8" opacity="0">${loop('opacity', '0;1;0', '1.4s', `begin="${d}"`)}</rect>`)
-      .join('')}`,
+    extra: `${tricorn(`${px(10.4, -5.2, 0.9, 2.6, RED)}${px(11.2, -5.6, 0.8, 1.2, RED)}`)}${sparkles}`,
     motion: move('0 0;0 -4;0 0', '2s'),
   },
 ]
 
+/** The big, animated crew mate on the game card. */
 function clawdArt(c: Clawd): string {
-  const swing = (id: string, values: string, dur: string) => `<g>${move(values, dur)}${id}</g>`
-  if (c.extra === 'wave') {
-    // right arm lifts and waves
-    return clawdShape(c.body).replace(px(12, 2, 2, 2, c.body), swing(px(12, 2, 2, 2, c.body), '0 0;0 -8;0 -4;0 -8;0 0', '1.2s'))
-  }
-  if (c.name === 'Courier') {
-    const body = clawdShape(c.body)
-      .replace(`${px(3, 6, 1, 2, c.body)}${px(8, 6, 1, 2, c.body)}`, swing(`${px(3, 6, 1, 2, c.body)}${px(8, 6, 1, 2, c.body)}`, '0 0;0 -3;0 0;0 0', '0.4s'))
-      .replace(px(0, 2, 2, 2, c.body), px(0, -1, 2, 4, c.body))
-      .replace(px(12, 2, 2, 2, c.body), px(12, -1, 2, 4, c.body))
-    return body + c.extra
-  }
-  if (c.name === 'Operator') {
-    const body = clawdShape(c.body)
-      .replace(px(0, 2, 2, 2, c.body), swing(px(0, 2, 2, 2, c.body), '0 0;0 2;0 0', '0.25s'))
-      .replace(px(12, 2, 2, 2, c.body), swing(px(12, 2, 2, 2, c.body), '0 2;0 0;0 2', '0.25s'))
-    return body + c.extra
-  }
-  if (c.name === 'Mecha') {
-    const glow = [4, 9]
-      .map(x => `<rect x="${x * P}" y="${2 * P}" width="${P}" height="${2 * P}" fill="#7fe3ff">${loop('fill', '#7fe3ff;#ffffff;#7fe3ff', '1.2s')}</rect>`)
-      .join('')
-    return clawdShape(c.body, { eyes: glow }) + c.extra
-  }
-  return clawdShape(c.body) + c.extra
+  const arm = c.armMotion ? `${move(c.armMotion, c.name === 'Deckhand' ? '1.2s' : '0.6s')}${c.rightArm ?? ''}` : c.rightArm
+  const step = c.walk ? move('0 0;0 -3;0 0;0 0', '0.5s') : ''
+  return clawdShape(c.body, { rightArm: arm, leftArm: c.leftArm, legsA: step }) + c.extra
 }
 
-/** A still Clawd for the ladder: its look and accessories, no motion. */
+/** A still crew mate for the ladder: its outfit, no motion (sparkles off). */
 function miniArt(c: Clawd): string {
-  const eyes = [4, 9].map(x => px(x, 2, 1, 2, c.name === 'Mecha' ? '#7fe3ff' : EYE)).join('')
-  return clawdShape(c.body, { eyes }) + (c.extra === 'wave' ? '' : c.extra)
+  return clawdShape(c.body, { eyes: stillEyes, rightArm: c.rightArm, leftArm: c.leftArm }) + c.extra.replace(sparkles, '')
 }
 
 const clawdFor = (level: number) => CLAWDS[Math.min(level, CLAWDS.length) - 1] ?? CLAWDS[0]!
@@ -636,16 +710,19 @@ function SectionToggle(E: any, key: string, label: string, right: string, isOpen
 }
 
 /** The game card: level, XP, streak and Clawds, fed by to-dos and meetings alike. Sits above both lists. */
-function drawGame(E: any, g: ReturnType<typeof gameOf>, meetingsLeft: number) {
-  const { Box, Text, Progress } = E
+function drawGame(E: any, g: ReturnType<typeof gameOf>, meetingsLeft: number, pick: number | null, $: any) {
+  const { Box, Text, Progress, Button } = E
+  const unlocked = Math.min(g.level, CLAWDS.length)
+  const shownLevel = pick !== null && pick >= 1 && pick <= unlocked ? pick : unlocked
+  const shown = CLAWDS[shownLevel - 1]!
   const Svg = E.Svg
   const total = g.doneToday + g.open.length + meetingsLeft
   return (
     <Box flexDirection="column" gap={1}>
       {Svg ? (
         <Svg
-          source={heroSvg(g, meetingsLeft)}
-          alt={`Level ${g.level} ${g.title}, ${g.xp} XP (${g.todoXp} from to-dos, ${g.meetXp} from meetings), ${g.open.length} to-dos open, ${meetingsLeft} meetings left, ${g.doneToday} done today, ${g.streak}-day streak. Clawds: ${CLAWDS.map((c, i) => (g.level >= i + 1 ? `${c.name} unlocked` : `${c.name} locked until level ${i + 1}`)).join(', ')}`}
+          source={heroSvg(g, meetingsLeft, shown)}
+          alt={`Level ${g.level} ${g.title}, ${g.xp} XP (${g.todoXp} from to-dos, ${g.meetXp} from meetings), ${g.open.length} to-dos open, ${meetingsLeft} meetings left, ${g.doneToday} done today, ${g.streak}-day streak. On deck: ${shown.name}. Crew: ${CLAWDS.map((c, i) => (g.level >= i + 1 ? `${c.name} unlocked` : `${c.name} locked until level ${i + 1}`)).join(', ')}`}
         />
       ) : (
         <Box flexDirection="column" borderStyle="round" borderColor={C.coral} paddingX={1}>
@@ -653,9 +730,21 @@ function drawGame(E: any, g: ReturnType<typeof gameOf>, meetingsLeft: number) {
             Level {g.level} <Text color={C.coral}>{g.title}.</Text> <Text color={C.gold}>🔥 {g.streak}</Text>
           </Text>
           <Text dimColor>
-            👾 {clawdFor(g.level).name} · Clawds {Math.min(g.level, CLAWDS.length)} of {CLAWDS.length} · to-dos {g.todoXp} XP · meetings {g.meetXp} XP
+            ⚓ {shown.name} · crew {unlocked} of {CLAWDS.length} · to-dos {g.todoXp} XP · meetings {g.meetXp} XP
           </Text>
           <Progress label={`XP to level ${g.level + 1}`} value={g.xp - g.floor} max={g.ceil - g.floor} valueText={`${g.xp} XP`} color={C.coral} />
+        </Box>
+      )}
+      {unlocked > 1 && (
+        <Box flexDirection="row" flexWrap="wrap" columnGap={1}>
+          <Text mono size="caption" dimColor>
+            ON DECK
+          </Text>
+          {CLAWDS.slice(0, unlocked).map((c, i) => (
+            <Button key={`crew-${i + 1}`} plain onPress={() => void pickCrew($, i + 1)}>
+              {i + 1 === shownLevel ? `● ${c.name}` : c.name}
+            </Button>
+          ))}
         </Box>
       )}
       {total > 0 && (
@@ -919,6 +1008,7 @@ async function drawPanel($: any, e: any) {
   const isShowingPast = await read($, showPastMeetings)
   const isShowingHandled = await read($, showMeetingsHandled)
   const log = await read($, meetingLog)
+  const pick = await read($, crewPick)
   const cols = Math.max(24, (e.props as any)?.bodyColumns ?? e.viewport?.columns ?? 60)
   const isWidget = (e.props as any)?.placement === 'widget'
   const textLen = Math.max(40, cols * 2 - 12)
@@ -955,7 +1045,7 @@ async function drawPanel($: any, e: any) {
   return (
     <Box flexDirection="column" gap={1}>
       {/* The game: fed by both lists below */}
-      {drawGame(E, g, meetingsLeft)}
+      {drawGame(E, g, meetingsLeft, pick, $)}
 
       {/* To do: open by default */}
       {SectionToggle(E, 'toggle-todos', `TO DO · ${hasTodos ? g.open.length : '…'}`, todoRight, isTodosOpen, () => void update($, todosOpen, v => !v))}
@@ -1016,6 +1106,7 @@ export const register: Register = on => {
     void $.ui.open({ id: PANE, title: TITLE })
     // to-dos first (local file), then the calendar (a network call)
     void loadMeetingLog($)
+    void loadCrewPick($)
     void refresh($).then(() => refreshMeetings($))
     return next(e)
   })
