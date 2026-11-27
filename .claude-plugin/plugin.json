@@ -1,6 +1,6 @@
 {
   "name": "wiki-sidebar",
-  "version": "0.11.0",
+  "version": "0.10.0",
   "description": "LLM Wiki quest board: reads the local Obsidian vault, shows level, streak, quests and bosses, with links into Obsidian",
   "author": { "name": "Andrea Cavagna" },
   "types": "./types/index.d.ts"

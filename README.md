@@ -8,7 +8,7 @@ A Claude Code mod for the LLM Wiki Obsidian vault. It opens a "To-do quests" pan
 - Each meeting shows a call to action by kind (you host, 1:1, daily, listen-in, meeting) and a **Prepare** button: it asks Claude to retrieve the context (earlier notes in `raw/meetings`, wiki pages, links in the invite, Slack/Notion, `todo.md`) and write a prep note to `meeting-prep/YYYY-MM-DD-<slug>.md` in the vault. Once the note exists the card shows **Open prep** (in Obsidian). **Prep my day** does all the unprepared ones in one go.
 - The pane opens when a session starts.
 - `/wiki` reopens it and prints the to-do list.
-- Each open to-do has a **Start** button: it opens a **new chat** (a separate Claude Code session in the vault, started through the desktop app's `start_session` tool) with "Start working on: <item> (<link>) · <source>" and the vault rule that anything outward-facing is a draft for review, and marks the item `- [/]`. The chat the pane sits beside gets nothing. The new session is linked to that chat, so the app may relay its turn-end notes back to it. If the app refuses, the prompt is copied to the clipboard instead. Done items have none.
+- Each open to-do has a **Start** button: it sends "Start working on: <item> (<link>) · <source>" to the chat, with the vault rule that anything outward-facing is a draft for review. Done items have none.
 - Asking in plain words also opens it: "open the wiki sidebar", "show the sidebar", "apri la sidebar".
 
 ## Install
