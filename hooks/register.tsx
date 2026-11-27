@@ -281,10 +281,44 @@ function startPrompt(t: TodoItem): string {
   ].join('\n')
 }
 
-function startTodo($: any, t: TodoItem) {
-  askClaude($, startPrompt(t))
+/** The Claude Code desktop app's own tool that starts a separate session; a mod reaches it through `$.tool.call`. */
+const START_SESSION_TOOL = 'mcp__ccd_session__start_session'
+
+const START_BACKGROUND =
+  'Started from the wiki-sidebar "To-do quests" pane in the LLM Wiki Obsidian vault. The item comes from todo.md; the person clicked Start on it. Work in this vault folder, follow CLAUDE.md, and keep anything outward-facing as a draft for review.'
+
+/**
+ * Start a to-do in a new chat: a fresh Claude Code session (desktop app) that opens with
+ * the same prompt, so the chat the pane sits beside gets nothing. If the app refuses or
+ * has no such tool, the prompt goes to the clipboard instead of into this chat.
+ */
+async function startInNewChat($: any, t: TodoItem): Promise<boolean> {
+  try {
+    const res = await $.tool.call({
+      tool: START_SESSION_TOOL,
+      consent: `The user pressed "Start" on the to-do "${t.text}" in the wiki-sidebar pane, asking for it to start in a new chat.`,
+      initiation: 'user_asked',
+      context: 'fresh',
+      use_worktree: false,
+      title: cut(`To-do: ${t.text}`, 58),
+      prompt: startPrompt(t),
+      background: START_BACKGROUND,
+    })
+    return !res.deny && !res.isError
+  } catch {
+    return false
+  }
+}
+
+async function startTodo($: any, t: TodoItem) {
   if (!t.isStarted) void setStarted($, t.id, true)
-  void $.ui.toast(`${t.isStarted ? 'Continuing' : 'Started'}: ${cut(t.text, 40)}`)
+  const label = `${t.isStarted ? 'Continuing' : 'Started'}: ${cut(t.text, 40)}`
+  if (await startInNewChat($, t)) {
+    void $.ui.toast(`${label} (new chat)`)
+    return
+  }
+  const copied = await $.ui.copy({ text: startPrompt(t) }).catch(() => ({ isCopied: false }))
+  void $.ui.toast(copied.isCopied ? `${label}. No new chat: prompt copied, paste it in one` : `${label}. Couldn't open a new chat`)
 }
 
 // ---------- meetings ----------
@@ -705,7 +739,7 @@ function TodoCard($: any, E: any, t: TodoItem, textLen: number) {
             ✓ Done · +{XP_PER_TODO} XP
           </Button>
         ) : (
-          <Button key={`next-${t.id}`} variant="primary" onPress={() => startTodo($, t)}>
+          <Button key={`next-${t.id}`} variant="primary" onPress={() => void startTodo($, t)}>
             ▶ Start
           </Button>
         )}
